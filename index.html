@@ -4,10 +4,12 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Dashboard điều hành CCTS — SLA & Nhân sự</title>
-<script src="libs/xlsx.full.min.js"></script>
-<script src="libs/chart.umd.min.js"></script>
-<script src="libs/html2canvas.min.js"></script>
-<script src="libs/station_map.js"></script>
+<!-- Thư viện công khai tải từ CDN (khỏi upload libs/ nặng lên repo) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<!-- station_map.js là file RIÊNG (sinh từ data) — bắt buộc upload lên repo tại libs/station_map.js -->
+<script src="libs/station_map.js?v=20260716b"></script>
 <style>
 :root{
   --navy:#1a3a5c; --blue:#2e6da4; --green:#2e8b57; --red:#c0392b; --amber:#e67e22;
@@ -390,7 +392,7 @@ footer{padding:8px 16px 20px; color:var(--muted); font-size:11px;}
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-database-compat.js"></script>
-<script src="config.js?v=20260716a"></script>
-<script src="app.js?v=20260716a"></script>
+<script src="config.js?v=20260716b"></script>
+<script src="app.js?v=20260716b"></script>
 </body>
 </html>
