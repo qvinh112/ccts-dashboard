@@ -753,13 +753,14 @@ const inExpSel = (t) => (expSel === "fast" ? t.limitH < 48 : expSel === "48" ? t
 const isOverVoms = (t) => (t.slaClass === "3h" || t.slaClass === "4h") && t.openToVomsH != null && t.openToVomsH > t.limitH;
 const needExplain = (t) => t.zone === "overdue" || t.rejected || isOverVoms(t);
 // phân loại TÌNH HUỐNG của ca giải trình — 1 nhãn chính, ưu tiên (nặng→nhẹ):
-// giờ xử lý muộn (Open→VOMS vượt SLA) > lỗi hệ thống (treo bên thứ 3) > resolve muộn (quá hạn giải pháp) > VOMS reject
-const EXP_SCN = { "Giờ xử lý muộn": "#e67e22", "Lỗi hệ thống": "#8e44ad", "Resolve muộn": COL.red, "VOMS reject": "#16a085" };
+// lỗi hệ thống (treo bên thứ 3) > resolve muộn > VOMS reject.
+// LƯU Ý vòng đời: Open → KTV xử lý → nhấn Resolve (= bước Open→VOMS). Nhấn resolve trễ
+// TỨC LÀ resolve muộn → "giờ xử lý muộn"/Open→VOMS vượt SLA và "resolve muộn" là MỘT.
+const EXP_SCN = { "Lỗi hệ thống": "#8e44ad", "Resolve muộn": COL.red, "VOMS reject": "#16a085" };
 const EXT_HOLDERS = new Set(["Tại ASP", "Tại VOMS", "Kẹt vật tư", "Kẹt firmware"]); // holderOf → đang treo bên ngoài team
 function explainScenario(t) {
-  if (isOverVoms(t)) return "Giờ xử lý muộn";                            // Open→VOMS vượt giờ SLA (3h/4h): hiện trường chậm
-  if (!t.refSol && EXT_HOLDERS.has(holderOf(t))) return "Lỗi hệ thống";  // chưa có solution & treo bên thứ 3 (VOMS/ASP/kho)
-  if (t.zone === "overdue") return "Resolve muộn";                       // quá hạn theo giải pháp
+  if (!t.refSol && EXT_HOLDERS.has(holderOf(t))) return "Lỗi hệ thống";  // chưa có solution & treo bên thứ 3 (ASP/kho/firmware)
+  if (t.zone === "overdue" || isOverVoms(t)) return "Resolve muộn";      // resolve trễ (gồm Open→VOMS vượt giờ SLA)
   if (t.rejected) return "VOMS reject";                                 // bị VOMS trả về Open / Close rejected
   return "Resolve muộn";                                                // dự phòng (needExplain đảm bảo đã dính ≥1)
 }
@@ -832,12 +833,12 @@ function renderDaily(f) {
 
 // --- Dashboard giải trình: 3 biểu đồ tròn (doughnut) xem THÀNH PHẦN các ca cần giải trình ---
 // (1) tỉ lệ Quá hạn/Đạt/Chưa có KQ trên TOÀN BỘ ticket tạo trong kỳ
-// (2) theo TÌNH HUỐNG (Giờ xử lý muộn / Lỗi hệ thống / Resolve muộn / VOMS reject) — đã/chưa giải trình để trong tooltip
+// (2) theo TÌNH HUỐNG (Resolve muộn / Lỗi hệ thống / VOMS reject) — đã/chưa giải trình để trong tooltip
 // (3) theo NGUYÊN NHÂN khách quan CSE đã phân loại (EXPLAIN_CATS)
 const PIE = ["#2e6da4", "#2e8b57", "#e67e22", "#c0392b", "#8e44ad", "#16a085", "#f39c12", "#2c3e50", "#d35400", "#27ae60"];
 function renderExplainDash(rows, all) {
   if (!$("c_exp_scn") || !$("c_exp_cat")) return; // chưa có canvas (vd bản live) → bỏ qua
-  const scns = ["Giờ xử lý muộn", "Lỗi hệ thống", "Resolve muộn", "VOMS reject"];
+  const scns = ["Resolve muộn", "Lỗi hệ thống", "VOMS reject"];
   const scnN = {}, done = {}, undone = {};
   for (const s of scns) { scnN[s] = 0; done[s] = 0; undone[s] = 0; }
   const catCount = {}; for (const c of EXPLAIN_CATS) catCount[c] = 0; catCount["(chưa phân loại)"] = 0;
