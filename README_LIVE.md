@@ -41,13 +41,19 @@ cd sla_monitor
 # (A) Live ticket đang mở — tự chạy mỗi chu kỳ monitor.py (đã móc sẵn). Test tay:
 python dashboard_push.py --once
 
-# (B) Toàn bộ dữ liệu — chạy MỖI LẦN bạn export Tickets.xlsx mới từ CCTS:
-python push_export.py                       # tự lấy *_Tickets.xlsx mới nhất trong Downloads
-python push_export.py "đường/dẫn/file.xlsx" # hoặc chỉ định file
-python push_export.py --dry                 # xem thống kê + dung lượng, không đẩy
+# (B) Toàn bộ dữ liệu — TỰ ĐỘNG mỗi ngày sau 6h sáng (auto_export.py, móc trong
+#     monitor.py): tự đăng nhập CCTS, bấm Download trên trang Tickets (Create Time
+#     = đầu tháng → hôm nay), chờ Export list Completed, tải về Downloads rồi đẩy
+#     /dashboard/full. Chạy tay khi cần số mới ngay:
+python auto_export.py                       # tải export mới + đẩy Firebase
+python auto_export.py --no-push             # chỉ tải file
+python push_export.py "đường/dẫn/file.xlsx" # đẩy 1 file export có sẵn (cách cũ)
 ```
 Chạy (B) xong, web tự chuyển sang chế độ Toàn cảnh (đủ panel).
-**Nên đặt lịch chạy (B)** sau mỗi lần export (hoặc mỗi sáng) để dữ liệu lịch sử luôn mới.
+Ghi chú auto_export: dùng profile Chromium RIÊNG (`ccts_sla_monitor/profile_export`)
+nên không đụng phiên quét của monitor; marker `last_auto_export.txt` chống chạy lặp
+trong ngày (lỗi thì chu kỳ 10' sau tự thử lại); export trên CCTS là job ngầm — file
+xuất hiện trong "Export list" (icon tải ở header) và bị CCTS xoá sau 3 ngày.
 
 ### 4. Deploy web lên GitHub Pages
 Đưa các file sau lên repo (KHÔNG cần các lib nặng — đã lấy từ CDN):
