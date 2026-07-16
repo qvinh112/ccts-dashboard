@@ -446,19 +446,25 @@ function deriveAll() {
     else if (zone === "V3") { t.limitH = t.hasParts ? 12 : 7; t.slaClass = t.limitH + "h"; }
     else { t.slaClass = "48h"; t.limitH = 48; }
 
-    // ontime/overdue: 3h/4h theo rule 07/07/2026 (cửa sổ Open → Pending for VOMS confirm ≈ solution đầu tiên);
-    // 7h/12h theo solution đầu (rule 02/07, cùng công thức); 48h giữ cờ SLA Status của CCTS như trước.
+    // thời gian Open → Pending for VOMS confirm (giờ) lấy trực tiếp từ Events Record — cần TRƯỚC khi tính zone
+    const w = vomsWin.get(t.id);
+    t.openToVomsH = (w && w.openT && w.vomsT && w.vomsT >= w.openT) ? (w.vomsT - w.openT) / HOURS : null;
+
+    // ontime/overdue (rule 16/07/2026): vòng đời Open → KTV xử lý → nhấn Resolve (= bước Open→VOMS).
+    // Resolve THỰC = cửa sổ Open → Pending for VOMS confirm, nên nhóm 3h/4h tính SLA theo Open→VOMS
+    // (không phải giờ ghi Solution — mốc đó là "solution muộn", khác resolve). Thiếu mốc Open→VOMS thì
+    // mới fallback về giờ solution đầu. 7h/12h vẫn theo solution đầu (rule 02/07); 48h giữ cờ SLA của CCTS.
+    const isFast = t.slaClass === "3h" || t.slaClass === "4h";
     if (t.slaClass === "48h") {
       t.zone = /overdue/i.test(t.slaCCTS) ? "overdue" : (/ontime/i.test(t.slaCCTS) ? "ontime" : "pending");
+    } else if (isFast && t.openToVomsH != null) {
+      t.zone = t.openToVomsH <= t.limitH ? "ontime" : "overdue";           // resolve thực = Open→VOMS
     } else if (first) {
-      t.zone = (first.t - t.createT) <= t.limitH * HOURS ? "ontime" : "overdue";
+      t.zone = (first.t - t.createT) <= t.limitH * HOURS ? "ontime" : "overdue"; // fallback / 7h/12h: giờ solution đầu
     } else {
       // chưa có solution: đã quá hạn tính đến giờ → overdue, chưa thì pending
       t.zone = (Date.now() - t.createT) > t.limitH * HOURS ? "overdue" : "pending";
     }
-    // thời gian Open → Pending for VOMS confirm (giờ) lấy trực tiếp từ Events Record
-    const w = vomsWin.get(t.id);
-    t.openToVomsH = (w && w.openT && w.vomsT && w.vomsT >= w.openT) ? (w.vomsT - w.openT) / HOURS : null;
 
     t.repeat7 = false; t.repeat30 = false; t.repeatOf = null;
     t.caused30 = false; // ticket này sửa xong nhưng lỗi lặp lại trong 30 ngày (dùng cho FTF)
@@ -759,8 +765,8 @@ const needExplain = (t) => t.zone === "overdue" || t.rejected || isOverVoms(t);
 const EXP_SCN = { "Lỗi hệ thống": "#8e44ad", "Resolve muộn": COL.red, "VOMS reject": "#16a085" };
 const EXT_HOLDERS = new Set(["Tại ASP", "Tại VOMS", "Kẹt vật tư", "Kẹt firmware"]); // holderOf → đang treo bên ngoài team
 function explainScenario(t) {
-  if (!t.refSol && EXT_HOLDERS.has(holderOf(t))) return "Lỗi hệ thống";  // chưa có solution & treo bên thứ 3 (ASP/kho/firmware)
-  if (t.zone === "overdue" || isOverVoms(t)) return "Resolve muộn";      // resolve trễ (gồm Open→VOMS vượt giờ SLA)
+  if (t.zone === "overdue" || isOverVoms(t)) return "Resolve muộn";      // resolve trễ (Open→VOMS vượt giờ SLA) — ưu tiên trước
+  if (!t.refSol && EXT_HOLDERS.has(holderOf(t))) return "Lỗi hệ thống";  // chưa có solution & treo bên thứ 3, resolve CHƯA trễ
   if (t.rejected) return "VOMS reject";                                 // bị VOMS trả về Open / Close rejected
   return "Resolve muộn";                                                // dự phòng (needExplain đảm bảo đã dính ≥1)
 }
