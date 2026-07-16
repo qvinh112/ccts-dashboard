@@ -752,13 +752,16 @@ const inExpSel = (t) => (expSel === "fast" ? t.limitH < 48 : expSel === "48" ? t
 // ngưỡng = t.limitH (nhóm 3h → >3h, nhóm 4h → >4h) — KHÔNG so cứng 3h như trước
 const isOverVoms = (t) => (t.slaClass === "3h" || t.slaClass === "4h") && t.openToVomsH != null && t.openToVomsH > t.limitH;
 const needExplain = (t) => t.zone === "overdue" || t.rejected || isOverVoms(t);
-// phân loại TÌNH HUỐNG của ca giải trình — 1 nhãn chính, ưu tiên: reject > treo bên thứ 3 > resolve muộn
-const EXP_SCN = { "Resolve muộn": COL.red, "Pending for other": COL.amber, "VOMS reject": "#8e44ad" };
+// phân loại TÌNH HUỐNG của ca giải trình — 1 nhãn chính, ưu tiên (nặng→nhẹ):
+// giờ xử lý muộn (Open→VOMS vượt SLA) > lỗi hệ thống (treo bên thứ 3) > resolve muộn (quá hạn giải pháp) > VOMS reject
+const EXP_SCN = { "Giờ xử lý muộn": "#e67e22", "Lỗi hệ thống": "#8e44ad", "Resolve muộn": COL.red, "VOMS reject": "#16a085" };
 const EXT_HOLDERS = new Set(["Tại ASP", "Tại VOMS", "Kẹt vật tư", "Kẹt firmware"]); // holderOf → đang treo bên ngoài team
 function explainScenario(t) {
+  if (isOverVoms(t)) return "Giờ xử lý muộn";                            // Open→VOMS vượt giờ SLA (3h/4h): hiện trường chậm
+  if (!t.refSol && EXT_HOLDERS.has(holderOf(t))) return "Lỗi hệ thống";  // chưa có solution & treo bên thứ 3 (VOMS/ASP/kho)
+  if (t.zone === "overdue") return "Resolve muộn";                       // quá hạn theo giải pháp
   if (t.rejected) return "VOMS reject";                                 // bị VOMS trả về Open / Close rejected
-  if (!t.refSol && EXT_HOLDERS.has(holderOf(t))) return "Pending for other"; // chưa có solution & đang treo bên thứ 3
-  return "Resolve muộn";                                                // đã có/đang chờ solution nhưng vượt hạn
+  return "Resolve muộn";                                                // dự phòng (needExplain đảm bảo đã dính ≥1)
 }
 function dailyRows(f) {
   const day = $("d_day").value;
@@ -773,13 +776,13 @@ function dailyRows(f) {
     byDay[k][1]++;
     if (t.zone === "overdue") byDay[k][0]++;
   }
-  return { day, day2, created: all.length, rows: all.filter(needExplain), byDay };
+  return { day, day2, created: all.length, rows: all.filter(needExplain), byDay, all };
 }
 function renderDaily(f) {
   if (!$("d_day").value && tickets.size) { // mặc định = ngày có ticket mới nhất (không lấy ngày solution)
     $("d_day").value = dayKey(new Date(Math.max(...[...tickets.values()].map((t) => +t.createT))));
   }
-  const { day, day2, rows, created, byDay } = dailyRows(f);
+  const { day, day2, rows, created, byDay, all } = dailyRows(f);
   const multi = day2 && day2 !== day; // xem khoảng nhiều ngày: nhóm theo ngày trước, hiện thêm ngày ở cột Tạo lúc
   dailySummary(rows, created, byDay, multi);
   const order = { "3h": 0, "4h": 1, "7h": 2, "12h": 3, "48h": 4 };
@@ -817,23 +820,24 @@ function renderDaily(f) {
     if (cat) cat.style.color = cat.value ? "var(--text)" : "var(--muted)";
     const d = dailyRows(currentFilter());
     dailySummary(d.rows, d.created, d.byDay, d.day2 && d.day2 !== d.day);
-    renderExplainDash(d.rows);
+    renderExplainDash(d.rows, d.all);
     renderStats();
     flashSaved(1);
   };
   $("daily").querySelectorAll(".exp-input, .exp-cat").forEach((el) =>
     el.addEventListener("change", () => saveRow(el.dataset.tid))
   );
-  renderExplainDash(rows);
+  renderExplainDash(rows, all);
 }
 
-// --- Dashboard giải trình: 2 biểu đồ tròn (doughnut) xem THÀNH PHẦN các ca cần giải trình ---
-// (1) theo TÌNH HUỐNG (Resolve muộn / Pending for other / VOMS reject) — đã/chưa giải trình để trong tooltip
-// (2) theo NGUYÊN NHÂN khách quan CSE đã phân loại (EXPLAIN_CATS)
+// --- Dashboard giải trình: 3 biểu đồ tròn (doughnut) xem THÀNH PHẦN các ca cần giải trình ---
+// (1) tỉ lệ Quá hạn/Đạt/Chưa có KQ trên TOÀN BỘ ticket tạo trong kỳ
+// (2) theo TÌNH HUỐNG (Giờ xử lý muộn / Lỗi hệ thống / Resolve muộn / VOMS reject) — đã/chưa giải trình để trong tooltip
+// (3) theo NGUYÊN NHÂN khách quan CSE đã phân loại (EXPLAIN_CATS)
 const PIE = ["#2e6da4", "#2e8b57", "#e67e22", "#c0392b", "#8e44ad", "#16a085", "#f39c12", "#2c3e50", "#d35400", "#27ae60"];
-function renderExplainDash(rows) {
+function renderExplainDash(rows, all) {
   if (!$("c_exp_scn") || !$("c_exp_cat")) return; // chưa có canvas (vd bản live) → bỏ qua
-  const scns = ["Resolve muộn", "Pending for other", "VOMS reject"];
+  const scns = ["Giờ xử lý muộn", "Lỗi hệ thống", "Resolve muộn", "VOMS reject"];
   const scnN = {}, done = {}, undone = {};
   for (const s of scns) { scnN[s] = 0; done[s] = 0; undone[s] = 0; }
   const catCount = {}; for (const c of EXPLAIN_CATS) catCount[c] = 0; catCount["(chưa phân loại)"] = 0;
@@ -867,6 +871,24 @@ function renderExplainDash(rows) {
         title: { display: true, text: "Thành phần nguyên nhân khách quan" },
         tooltip: { callbacks: { label: (ctx) => `${ctx.label}: ${catCount[ctx.label]} (${pct(catCount[ctx.label])}%)` } } } },
   });
+  // (1) tỉ lệ quá hạn / tổng ticket tạo trong kỳ (sau miễn trừ, khớp %QH toàn dashboard)
+  if ($("c_exp_od")) {
+    const A = all || [];
+    let od = 0, on = 0, pend = 0;
+    for (const t of A) { if (t.zone === "pending") pend++; else if (effZone(t) === "overdue") od++; else on++; }
+    const tot = A.length || 1;
+    const oL = ["Quá hạn", "Đạt", "Chưa có KQ"], oV = [od, on, pend], oC = [COL.red, COL.green, COL.gray + "aa"];
+    const k = oV.map((v) => v > 0);
+    mkChart("c_exp_od", {
+      type: "doughnut",
+      data: { labels: oL.filter((_, i) => k[i]), datasets: [{ data: oV.filter((_, i) => k[i]),
+        backgroundColor: oC.filter((_, i) => k[i]), borderColor: "#fff", borderWidth: 1.5 }] },
+      options: { responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: "right", labels: { boxWidth: 12, font: { size: 11 } } },
+          title: { display: true, text: "Quá hạn sau miễn trừ / tổng ticket (" + A.length + ")" },
+          tooltip: { callbacks: { label: (ctx) => `${ctx.label}: ${ctx.parsed} (${Math.round(1000 * ctx.parsed / tot) / 10}%)` } } } },
+    });
+  }
 }
 function flashSaved(n) {
   $("d_saved").textContent = `✓ đã lưu ${n} giải trình lúc ${new Date().toLocaleTimeString("vi")} — đã trừ khỏi %QH`;
