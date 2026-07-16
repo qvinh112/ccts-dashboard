@@ -2119,9 +2119,11 @@ function setLiveStat(on, txt) {
   $("livetxt").textContent = txt;
 }
 
+let fullData = null;   // node /dashboard/full  = toàn bộ export (push_export.py)
+let liveData = null;   // node /dashboard/current = ticket đang mở (dashboard_push.py, 5–10')
+
 function startLive() {
-  LIVE_MODE = true;
-  document.body.classList.add("live");
+  document.body.classList.add("web");   // ẩn ô nạp file thủ công (dữ liệu tự về từ Firebase)
   setLiveStat(false, "Đang kết nối Firebase…");
   if (typeof firebase === "undefined") { setLiveStat(false, "Không tải được Firebase (kiểm tra mạng)"); return; }
   try {
@@ -2131,18 +2133,44 @@ function startLive() {
     // listener gắn SAU khi auth xong (rules yêu cầu auth != null)
     firebase.auth().onAuthStateChanged((u) => {
       if (!u) return;
+      liveDB.ref("dashboard/full").on("value",
+        (snap) => { fullData = snap.val(); refreshWeb(); },
+        (err) => setLiveStat(false, "Lỗi đọc full: " + err.message));
       liveDB.ref("dashboard/current").on("value",
-        (snap) => {
-          const v = snap.val();
-          if (!v || !v.rows || !v.rows.length) { setLiveStat(false, "Chưa có dữ liệu trên server (chờ chu kỳ quét)"); return; }
-          ingestLive(v);
-        },
-        (err) => setLiveStat(false, "Lỗi đọc dữ liệu: " + err.message));
+        (snap) => { liveData = snap.val(); refreshWeb(); },
+        (err) => setLiveStat(false, "Lỗi đọc live: " + err.message));
     });
   } catch (e) { setLiveStat(false, "Firebase lỗi: " + e.message); }
 }
 
-// nạp payload {meta, rows} vào tickets Map (thay cho ingestWorkbook) rồi render
+// điều phối: có full export -> chế độ TOÀN CẢNH (đủ panel) + phủ ticket mở; chỉ có live -> live-lite
+function refreshWeb() {
+  const hasFull = fullData && fullData.ti && fullData.ti.length;
+  const hasLive = liveData && liveData.rows && liveData.rows.length;
+  if (hasFull) {
+    LIVE_MODE = false;
+    document.body.classList.remove("live");   // hiện lại mọi panel lịch sử/vật tư
+    ingestFull(fullData);
+    const k = hasLive ? applyLive(liveData) : 0;
+    const at = new Date(fullData.meta && fullData.meta.at || Date.now());
+    setLiveStat(true, "🟢 Toàn cảnh: " + (fullData.meta && fullData.meta.file || "export") +
+      " · " + tickets.size + " ticket" + (k ? " · live " + k + " đang mở" : "") +
+      " · cập nhật " + at.toLocaleDateString("vi") + " " + at.toLocaleTimeString("vi"));
+    afterLoad();
+  } else if (hasLive) {
+    LIVE_MODE = true;
+    document.body.classList.add("live");
+    ingestLive(liveData);
+    const at = new Date(liveData.meta && liveData.meta.at || Date.now());
+    setLiveStat(true, "🟢 Live · " + tickets.size + " ticket tồn · cập nhật " + at.toLocaleTimeString("vi") +
+      "  (chưa có full export — chạy push_export.py để đủ panel)");
+    afterLoad();
+  } else {
+    setLiveStat(false, "Chưa có dữ liệu trên server (chờ chu kỳ quét / chạy push_export.py)");
+  }
+}
+
+// live-lite: nạp {meta, rows} ticket đang mở vào tickets Map (KHÔNG afterLoad — refreshWeb lo)
 function ingestLive(payload) {
   tickets = new Map(); solutions = new Map(); partRecs = new Map();
   rejectSet = new Set(); vomsWin = new Map();
@@ -2155,16 +2183,96 @@ function ingestLive(payload) {
       status: r.status || "", slaCCTS: "",
       createT: new Date(r.createT), closeT: null, hasParts: false,
       owner: (r.owner || "").trim(), collab: (r.collab || "").trim(),
-      // trường monitor tính sẵn (deriveLive dùng lại):
       _deadline: r.deadline ? new Date(r.deadline) : null,
       _limitH: r.limitH || 48, _zone: r.zone || "pending",
       _rep7: !!r.rep7, _rep30: !!r.rep30,
     });
   }
-  const at = payload.meta && payload.meta.at ? new Date(payload.meta.at) : new Date();
   loadedFiles = ["CCTS live"];
-  setLiveStat(true, "🟢 Live · cập nhật " + at.toLocaleTimeString("vi") + " · " + tickets.size + " ticket tồn");
-  afterLoad();
+}
+
+// TOÀN CẢNH: dựng lại tickets/solutions/partRecs/rejectSet/vomsWin từ full export.
+// Mirror ĐÚNG luồng ingestWorkbook (JS là nguồn chuẩn hóa duy nhất) nhưng đọc từ
+// mảng JSON push_export.py đẩy lên (ngày = epoch ms) thay vì đọc sheet xlsx.
+function ingestFull(payload) {
+  tickets = new Map(); solutions = new Map(); partRecs = new Map();
+  rejectSet = new Set(); vomsWin = new Map();
+  const D = (ms) => (ms ? new Date(ms) : null);
+
+  for (const r of (payload.events || [])) {
+    const tid = String(r.tid || "").trim();
+    const st = String(r.status || "").trim().toLowerCase();
+    const proc = String(r.proc || "").trim().toUpperCase();
+    const detail = String(r.detail || "").trim();
+    const hasDetail = !!detail && detail !== "----";
+    if (/close rejected/i.test(st) || (proc === "VOMS" && st === "open" && hasDetail)) rejectSet.add(tid);
+    const ct = D(r.createMs);
+    if (tid && ct && (st === "open" || st === "pending for voms confirm")) {
+      const w = vomsWin.get(tid) || {};
+      const k = st === "open" ? "openT" : "vomsT";
+      if (!w[k] || ct < w[k]) w[k] = ct;
+      vomsWin.set(tid, w);
+    }
+  }
+  const partsSet = new Set((payload.parts || []).map((r) => String(r.tid)));
+  for (const r of (payload.parts || [])) {
+    const tid = String(r.tid || "").trim(); if (!tid) continue;
+    const t = D(r.createMs);
+    const rec = {
+      tid, t, code: String(r.mcode || "").trim(), name: String(r.mname || "").trim(),
+      type: /broken/i.test(String(r.mtype || "")) ? "broken" : /good/i.test(String(r.mtype || "")) ? "good" : "khác",
+      qty: +(r.qty || 0) || 0, proc: String(r.proc || "").trim(),
+    };
+    partRecs.set(tid + "|" + rec.code + "|" + rec.type + "|" + (t ? t.getTime() : 0) + "|" + rec.qty, rec);
+  }
+  for (const r of (payload.ti || [])) {
+    const id = String(r.id || "").trim(); if (!id) continue;
+    const createT = D(r.createMs); if (!createT) continue;
+    tickets.set(id, {
+      id, extId: String(r.extId || "").trim(), name: String(r.name || ""),
+      station: String(r.station || "").trim(), cpid: String(r.cpid || "").trim(),
+      err: errCode(r.err), model: String(r.model || "").trim(), source: String(r.source || "").trim(),
+      status: String(r.status || ""), slaCCTS: String(r.sla || ""), createT,
+      closeT: D(r.closeMs), hasParts: partsSet.has(id),
+    });
+  }
+  for (const r of (payload.sol || [])) {
+    const tid = String(r.tid || "").trim();
+    const t = D(r.createMs);
+    if (!tid || !t) continue;
+    const proc = String(r.proc || "").trim();
+    const key = tid + "|" + t.getTime() + "|" + proc;
+    const att = String(r.att || "").trim();
+    solutions.set(key, {
+      tid, t, proc, isPerm: /permanent/i.test(String(r.stype || "")),
+      d60: norm60(r.desc), hasAtt: !!att && att !== "----",
+    });
+  }
+  loadedFiles = [(payload.meta && payload.meta.file) || "CCTS export"];
+}
+
+// phủ trạng thái realtime của ticket ĐANG MỞ (từ /dashboard/current) lên dữ liệu export.
+// ticket đã có trong export -> cập nhật trạng thái; ticket mở sau kỳ export -> thêm mới.
+// Trả về số ticket mở đã áp.
+function applyLive(payload) {
+  let n = 0;
+  for (const r of (payload.rows || [])) {
+    if (!r || r.id == null) continue;
+    const id = String(r.id);
+    const ex = tickets.get(id);
+    if (ex) {
+      ex.status = r.status || ex.status;   // trạng thái hiện tại thắng bản export
+    } else {
+      tickets.set(id, {
+        id, extId: r.extId || "", name: r.name || "", station: (r.station || "").trim(),
+        cpid: (r.cpid || "").trim(), err: r.err || "Không mã", model: r.model || "",
+        source: r.source || "", status: r.status || "", slaCCTS: "",
+        createT: new Date(r.createT), closeT: null, hasParts: false,
+      });
+    }
+    n++;
+  }
+  return n;
 }
 
 // suy diễn cho bản live: dựng trường phụ mà các panel còn lại cần, KHÔNG tính lại SLA

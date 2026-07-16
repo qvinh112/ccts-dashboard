@@ -80,8 +80,9 @@ td.warn{background:#fdf3e3; color:var(--amber); font-weight:700;}
 #af_bar .chip .x:hover{background:#d6e6f7;}
 body.tv #toolbar,body.tv #filebar,body.tv #dropzone,body.tv footer,body.tv .card h2 .note{display:none !important;}
 body.tv{font-size:15px;}
-/* bản LIVE (đọc realtime từ Firebase): ẩn ô nạp file + panel phân tích cần lịch sử/vật tư/solution */
-body.live #dropzone,body.live #filebar,body.live #btn_clear{display:none !important;}
+/* bản web (đọc từ Firebase): ẩn ô nạp file thủ công (dữ liệu tự về) */
+body.web #dropzone,body.web #filebar,body.web #btn_clear{display:none !important;}
+/* live-lite (CHỈ có ticket đang mở, chưa có full export): ẩn panel cần lịch sử/vật tư/solution */
 body.live .hist-only{display:none !important;}
 body.live [data-tab="parts"]{display:none !important;}
 #livestat{display:flex;align-items:center;gap:6px;}
@@ -392,7 +393,7 @@ footer{padding:8px 16px 20px; color:var(--muted); font-size:11px;}
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-database-compat.js"></script>
-<script src="config.js?v=20260716b"></script>
-<script src="app.js?v=20260716b"></script>
+<script src="config.js?v=20260716c"></script>
+<script src="app.js?v=20260716c"></script>
 </body>
 </html>
