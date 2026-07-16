@@ -759,14 +759,13 @@ const inExpSel = (t) => (expSel === "fast" ? t.limitH < 48 : expSel === "48" ? t
 const isOverVoms = (t) => (t.slaClass === "3h" || t.slaClass === "4h") && t.openToVomsH != null && t.openToVomsH > t.limitH;
 const needExplain = (t) => t.zone === "overdue" || t.rejected || isOverVoms(t);
 // phân loại TÌNH HUỐNG của ca giải trình — 1 nhãn chính, ưu tiên (nặng→nhẹ):
-// lỗi hệ thống (treo bên thứ 3) > resolve muộn > VOMS reject.
+// resolve muộn > lỗi hệ thống (status "Pending for others") > VOMS reject.
 // LƯU Ý vòng đời: Open → KTV xử lý → nhấn Resolve (= bước Open→VOMS). Nhấn resolve trễ
 // TỨC LÀ resolve muộn → "giờ xử lý muộn"/Open→VOMS vượt SLA và "resolve muộn" là MỘT.
 const EXP_SCN = { "Lỗi hệ thống": "#8e44ad", "Resolve muộn": COL.red, "VOMS reject": "#16a085" };
-const EXT_HOLDERS = new Set(["Tại ASP", "Tại VOMS", "Kẹt vật tư", "Kẹt firmware"]); // holderOf → đang treo bên ngoài team
 function explainScenario(t) {
   if (t.zone === "overdue" || isOverVoms(t)) return "Resolve muộn";      // resolve trễ (Open→VOMS vượt giờ SLA) — ưu tiên trước
-  if (!t.refSol && EXT_HOLDERS.has(holderOf(t))) return "Lỗi hệ thống";  // chưa có solution & treo bên thứ 3, resolve CHƯA trễ
+  if (t.status === "Pending for others") return "Lỗi hệ thống";         // đang treo "Pending for others" (VOMS/hệ thống giữ)
   if (t.rejected) return "VOMS reject";                                 // bị VOMS trả về Open / Close rejected
   return "Resolve muộn";                                                // dự phòng (needExplain đảm bảo đã dính ≥1)
 }
