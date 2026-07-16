@@ -67,9 +67,9 @@ td.warn{background:#fdf3e3; color:var(--amber); font-weight:700;}
 .heat{font-size:12px;}
 .heat td{text-align:center;}
 .heat td.h1{background:#fff5f5;} .heat td.h2{background:#fbd9d3;} .heat td.h3{background:#f5a898;} .heat td.h4{background:#e2604c; color:#fff;}
-#modal,#syncmodal,#searchmodal{position:fixed; inset:0; background:rgba(20,30,45,.55); display:none; align-items:center; justify-content:center; z-index:50;}
-#modal .box,#syncmodal .box,#searchmodal .box{background:#fff; border-radius:12px; padding:18px; width:520px; max-height:82vh; overflow:auto;}
-#modal h3,#syncmodal h3,#searchmodal h3{color:var(--navy); margin-bottom:10px; font-size:15px;}
+#modal,#searchmodal{position:fixed; inset:0; background:rgba(20,30,45,.55); display:none; align-items:center; justify-content:center; z-index:50;}
+#modal .box,#searchmodal .box{background:#fff; border-radius:12px; padding:18px; width:520px; max-height:82vh; overflow:auto;}
+#modal h3,#searchmodal h3{color:var(--navy); margin-bottom:10px; font-size:15px;}
 .srow{border:1px solid var(--border); border-radius:8px; padding:8px 10px; margin-bottom:8px;}
 .srow .sh{font-weight:700; color:var(--navy); display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap;}
 .srow .sl{color:var(--muted); margin-top:3px; line-height:1.55;}
@@ -95,9 +95,7 @@ body.tv header h1{font-size:22px;}
 body.tv .kpi .t{font-size:12px;}
 #modal table td{text-align:left;}
 #modal select{padding:3px 6px; border:1px solid var(--border); border-radius:5px;}
-#modal .row,#syncmodal .row{display:flex; gap:8px; margin-top:12px; justify-content:flex-end; flex-wrap:wrap;}
-#syncmodal label{display:flex; flex-direction:column; gap:3px; font-size:12px; font-weight:600; color:var(--muted); margin-top:8px;}
-#syncmodal input{padding:6px 8px; border:1px solid var(--border); border-radius:6px; font-size:13px;}
+#modal .row{display:flex; gap:8px; margin-top:12px; justify-content:flex-end; flex-wrap:wrap;}
 .pill{display:inline-block; padding:1px 8px; border-radius:10px; font-size:11px; font-weight:700;}
 .p3{background:#dbeafe; color:#1d4ed8;} .p4{background:#dcfce7; color:#15803d;}
 .p7{background:#fef3c7; color:#b45309;} .p48{background:#e5e7eb; color:#374151;}
@@ -159,7 +157,6 @@ footer{padding:8px 16px 20px; color:var(--muted); font-size:11px;}
   <label>Người<select id="f_person"><option value="">Tất cả</option></select></label>
   <label>Bảng theo<select id="f_level"><option value="person">Người</option><option value="group">Khu</option></select></label>
   <button class="btn-gray" id="btn_groups">⚙ Phân khu nhân sự</button>
-  <button class="btn-gray" id="btn_sync">☁ Đồng bộ giải trình</button>
   <button class="btn-green" id="btn_xlsx">⬇ Xuất Excel</button>
   <button class="btn-navy" id="btn_png">🖼 Xuất ảnh PNG</button>
   <button class="btn-gray" id="btn_tv" title="Chế độ màn hình lớn (TV): ẩn công cụ, tự xoay tab mỗi 30s. Bấm lại hoặc Esc để thoát">🖥 TV</button>
@@ -241,7 +238,6 @@ footer{padding:8px 16px 20px; color:var(--muted); font-size:11px;}
         <input type="date" id="d_day2" title="Để trống = chỉ xem 1 ngày" style="padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-size:12.5px">
         <button class="btn-blue" id="btn_explain_save" style="padding:4px 10px;font-size:12px">💾 Lưu giải trình</button>
         <button class="btn-gray" id="btn_copy_report" style="padding:4px 10px;font-size:12px">📋 Copy báo cáo gửi quản lý</button>
-        <button class="btn-blue" id="btn_mirror" style="padding:4px 10px;font-size:12px" title="Ghi toàn bộ danh sách bảng này (mọi nhóm SLA trong khoảng ngày, đủ 19 cột) lên sheet online GiaiTrinh — đè theo Ticket ID, dòng của ticket khác trên sheet GIỮ NGUYÊN">☁ Ghi đè sheet online</button>
         <button class="btn-green" id="btn_daily" style="padding:4px 10px;font-size:12px">⬇ Xuất Excel (theo lựa chọn)</button>
         <button class="btn-green" id="btn_3h_report" style="padding:4px 10px;font-size:12px" title="Xuất toàn bộ ticket mọi nhóm SLA (3h/4h/7h/12h/48h) trong kỳ lọc, kèm giải trình">⬇ Xuất toàn bộ ticket</button>
       </span>
@@ -361,26 +357,6 @@ footer{padding:8px 16px 20px; color:var(--muted); font-size:11px;}
   </div>
 </div></div>
 
-<div id="syncmodal"><div class="box">
-  <h3>☁ Đồng bộ giải trình online (nhiều người dùng chung)</h3>
-  <div style="font-size:12.5px;color:var(--muted);line-height:1.6">
-    Giải trình hiện lưu trên từng máy. Để lưu giữ lâu dài &amp; đồng bộ giữa nhiều người: triển khai file <b>apps_script_giai_trinh.gs</b> (nằm trong thư mục dashboard — có hướng dẫn cài từng bước) lên Apps Script của Google Sheet, lấy URL Web App dạng <b>…/exec</b> rồi dán vào đây. Sau đó mỗi lần lưu giải trình sẽ <b>tự đẩy lên</b>; bấm <b>Tải giải trình về</b> để lấy phần người khác nhập. Cả nhóm dán CÙNG một URL, mỗi người gõ tên riêng.
-  </div>
-  <label>URL Web App (…/exec)
-    <input id="sync_url" placeholder="https://script.google.com/macros/s/…/exec">
-  </label>
-  <label>Tên người nhập (ghi ai giải trình)
-    <input id="sync_user" placeholder="vd: hungvu">
-  </label>
-  <div id="sync_status" style="font-size:12.5px;margin-top:10px;min-height:16px"></div>
-  <div class="row">
-    <button class="btn-gray" id="sync_pull">⬇ Tải giải trình về</button>
-    <button class="btn-gray" id="sync_pushall">⬆ Đẩy toàn bộ máy này lên</button>
-    <button class="btn-green" id="sync_save">💾 Lưu cấu hình</button>
-    <button class="btn-navy" id="sync_close">Đóng</button>
-  </div>
-</div></div>
-
 <div id="searchmodal"><div class="box" style="width:640px">
   <h3>🔎 Kết quả tra cứu <span id="search_n" style="font-weight:400;font-size:12px;color:var(--muted)"></span></h3>
   <div id="search_body" style="font-size:12.5px"></div>
@@ -394,6 +370,6 @@ footer{padding:8px 16px 20px; color:var(--muted); font-size:11px;}
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-database-compat.js"></script>
 <script src="config.js?v=20260716c"></script>
-<script src="app.js?v=20260716c"></script>
+<script src="app.js?v=20260716d"></script>
 </body>
 </html>

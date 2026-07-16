@@ -34,13 +34,9 @@ let tvTimer = null;           // bộ đếm tự xoay tab ở chế độ TV
 
 // giải trình nguyên nhân khách quan cho ticket quá hạn (CSE gõ tay, lưu trên máy) — có giải trình = loại khỏi % sau miễn trừ
 const LS_EXPLAIN = "ccts_dash_explain_v1";
-// đồng bộ giải trình online qua Apps Script Web App (apps_script_giai_trinh.gs) — nhiều người dùng chung 1 URL
-const LS_SYNC = "ccts_dash_sync_v1";
-// URL Web App đã deploy sẵn (09/07/2026) — điền sẵn để cả nhóm khỏi phải nhập/nhớ
-const SYNC_URL_DEFAULT = "https://script.google.com/macros/s/AKfycbwsOlSuYyR4l82YsW2U77tDbF6bNiIF3epqhAG_Zl59f5EXRMTthFGJTolbfG4FjvsKvg/exec";
-let syncCfg = {};
-try { syncCfg = JSON.parse(localStorage.getItem(LS_SYNC) || "{}"); } catch (e) { syncCfg = {}; }
-if (!syncCfg.url) syncCfg.url = SYNC_URL_DEFAULT; // chưa cấu hình gì thì dùng URL mặc định (đồng bộ bật sẵn)
+// tên người nhập (ghi kèm mỗi giải trình đẩy lên Firebase) — lấy lại từ cấu hình đồng bộ cũ nếu có
+let syncUser = "";
+try { syncUser = (JSON.parse(localStorage.getItem("ccts_dash_sync_v1") || "{}").user) || ""; } catch (e) {}
 // phân loại nguyên nhân khách quan (theo các nhóm miễn trừ đã dùng trong báo cáo SLA3h + disclaim của CCVN)
 const EXPLAIN_CATS = ["Trạm đêm đóng cửa (22h–6h)", "Thời tiết / thiên tai", "Hạ tầng điện / mạng", "Không tiếp cận được trạm", "Chờ vật tư", "Lỗi hệ thống VOMS/CCTS", "Khách quan khác"];
 let explainMap = {};
@@ -57,123 +53,35 @@ function saveExplain(tid, cat, text) {
   if ((cat || "").trim() || (text || "").trim()) explainMap[tid] = { c: (cat || "").trim(), t: (text || "").trim() };
   else delete explainMap[tid];
   localStorage.setItem(LS_EXPLAIN, JSON.stringify(explainMap));
-  pushExplain(tid); // đẩy lên server nếu đã cấu hình đồng bộ (không thì bỏ qua)
+  fbPushExplain(tid); // đẩy lên Firebase (bản offline FIREBASE_CONFIG=null thì chỉ lưu máy)
 }
-// --- đồng bộ giải trình online (Apps Script Web App) ---
-// dựng payload 1 ticket (đủ 20 cột ngữ cảnh nếu ticket đang có trong bộ nhớ) — dùng chung cho đẩy lẻ + ghi đè toàn sheet
-function syncBody(tid) {
-  const e = expOf(tid), t = tickets.get(tid);
-  const body = { tid, cat: e.c, text: e.t, user: syncCfg.user || "" };
-  if (t) { // đẩy kèm ĐẦY ĐỦ ngữ cảnh để sheet online tự chứa đủ thông tin (không phải mở lại dashboard mới hiểu)
-    body.name = t.name || "";
-    body.extId = t.extId || "";
-    body.day = dayKey(t.createT);
-    body.station = t.station || "";
-    body.err = t.err || "";
-    body.sla = t.slaClass || "";
-    body.createAt = dayKey(t.createT) + " " + pad(t.createT.getHours()) + ":" + pad(t.createT.getMinutes());
-    body.dur = t.refSol ? Math.round((t.refSol.t - t.createT) / 360000) / 10 : "";
-    body.limit = t.limitH;
-    body.voms = t.openToVomsH != null ? Math.round(t.openToVomsH * 10) / 10 : "";
-    body.result = t.zone === "pending" ? "Chưa có sol" : isExempt(t) ? "Miễn trừ" : t.zone === "overdue" ? "Quá hạn" : "Đạt";
-    body.why = [t.zone === "overdue" ? "Quá hạn" : "", t.rejected ? "VOMS reject" : "", isOverVoms(t) ? "Open→VOMS>" + t.limitH + "h" : ""].filter(Boolean).join(" · ");
-    body.proc = t.proc || "";
-    body.grp = t.proc ? grpOf(t.proc) : "";
-    body.status = t.status || "";
-  }
-  return body;
+// --- đồng bộ giải trình qua Firebase (/dashboard/explain) ---
+// Thay kênh Apps Script + Google Sheet cũ (bỏ 16/07/2026): giải trình giờ nằm cùng project
+// Firebase với dữ liệu dashboard — realtime cho mọi người đang mở web, không còn cold-start
+// hay phải redeploy .gs. Bản offline (FIREBASE_CONFIG=null) chỉ lưu localStorage như xưa.
+let fbExpRef = null;     // ref dashboard/explain — gắn trong startLive SAU khi auth xong
+let _expPending = null;  // snapshot server chờ áp (hoãn khi user đang gõ dở ô giải trình)
+// key Firebase không được chứa . # $ / [ ] — mã hóa (tên ticket có dấu chấm: "B.HNO…")
+function expKey(tid) { return String(tid).replace(/[.#$/\[\]]/g, (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase()); }
+// đẩy 1 giải trình lên Firebase (upsert theo ticket; xóa node khi giải trình bị xóa trống)
+function fbPushExplain(tid) {
+  if (!fbExpRef) return;
+  const e = expOf(tid);
+  if (e.c || e.t) fbExpRef.child(expKey(tid)).set({ id: tid, c: e.c, t: e.t, user: syncUser || "", up: Date.now() }).catch(() => {});
+  else fbExpRef.child(expKey(tid)).remove().catch(() => {});
 }
-// đẩy 1 giải trình lên server (no-cors: gửi được nhưng không đọc phản hồi; upsert theo Ticket ID phía .gs)
-function pushExplain(tid) {
-  if (!syncCfg.url) return;
-  fetch(syncCfg.url, { method: "POST", mode: "no-cors", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(syncBody(tid)) }).catch(() => {});
-}
-// Đổ bảng "Giải trình tích hợp" đang xem lên sheet online: đè/bổ sung THEO TICKET ID (mọi nhóm SLA trong
-// khoảng ngày, bỏ qua chip lọc nhanh/48h) — dòng trùng ID được ghi lại đủ 20 cột, ID mới thêm vào cuối,
-// dòng của ticket KHÁC trên sheet giữ nguyên (không xóa gì). Cần .gs bản mới (doPost mode "merge").
-function pushMirror() {
-  if (!tickets.size) { alert("Chưa nạp file dữ liệu — kéo file export vào trước đã."); return; }
-  if (!syncCfg.url) { alert("Chưa cấu hình URL đồng bộ (nút ☁ Đồng bộ giải trình trên toolbar)."); return; }
-  const old = expSel; expSel = ""; // luôn đẩy MỌI nhóm SLA, không phụ thuộc chip đang lọc
-  const d = dailyRows(currentFilter());
-  expSel = old;
-  if (!d.rows.length) { alert("Bảng giải trình đang trống (khoảng ngày " + d.day + (d.day2 !== d.day ? " → " + d.day2 : "") + ") — không có gì để ghi lên sheet."); return; }
-  const order = { "3h": 0, "4h": 1, "7h": 2, "12h": 3, "48h": 4 };
-  d.rows.sort((a, b) => dayKey(a.createT).localeCompare(dayKey(b.createT)) || (order[a.slaClass] ?? 9) - (order[b.slaClass] ?? 9) || b.createT - a.createT);
-  if (!confirm("Ghi " + d.rows.length + " dòng của bảng này (mọi nhóm SLA, " + d.day + (d.day2 !== d.day ? " → " + d.day2 : "") + ") lên sheet online \"GiaiTrinh\".\nDòng trùng Ticket ID sẽ bị ghi đè đủ 20 cột; dòng của ticket khác GIỮ NGUYÊN.\nTiếp tục?")) return;
-  const st = (msg, color) => { $("d_saved").textContent = msg; $("d_saved").style.color = color; };
-  st("⏳ đang tải bản mới nhất về trước khi ghi…", "var(--muted)");
-  pullExplain(() => { // gộp giải trình mới nhất từ máy khác trước, rồi mới dựng dòng để không ghi đè mất
-    const rows = d.rows.map((t) => syncBody(t.id));
-    fetch(syncCfg.url, { method: "POST", mode: "no-cors", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ mode: "merge", rows }) }).catch(() => {});
-    st("⏳ đã gửi " + rows.length + " dòng, đang chờ server ghi…", "var(--muted)");
-    setTimeout(() => pullExplain((n, err) => {
-      if (n < 0) st("⚠ đã gửi nhưng chưa xác nhận được (" + err + ") — mở sheet GiaiTrinh kiểm tra tay", "var(--red)");
-      else if (n < rows.length) st("⚠ sheet online hiện " + n + " dòng, ÍT hơn " + rows.length + " dòng vừa gửi — kiểm tra đã redeploy .gs bản mới (mode merge) chưa", "var(--red)");
-      else { st("✓ đã đè/bổ sung " + rows.length + " dòng theo Ticket ID — sheet online hiện " + n + " dòng (" + new Date().toLocaleTimeString("vi") + ")", "var(--green)"); renderStats(); }
-    }), 4000);
-  });
-}
-// đẩy TOÀN BỘ giải trình đang lưu trên máy này lên server (dùng khi lần đầu bật đồng bộ)
-function pushAllExplain(cb) {
-  const ids = Object.keys(explainMap);
-  ids.forEach((tid) => pushExplain(tid));
-  cb && cb(ids.length);
-}
-// ghi các dòng [Ticket ID, Name, Ngày, Phân loại, Giải trình, ...] từ server vào explainMap (server là nguồn chuẩn)
-function applyExplainRows(rows) {
-  let n = 0;
-  for (const row of rows) {
-    const rid = String(row[0] || "").trim();
-    if (!rid) continue;
-    const cat = String(row[3] == null ? "" : row[3]).trim(), text = String(row[4] == null ? "" : row[4]).trim();
-    if (cat || text) explainMap[rid] = { c: cat, t: text }; else delete explainMap[rid];
-    n++;
-  }
+// áp snapshot server vào explainMap (server là nguồn chuẩn). Đang gõ dở ô giải trình thì
+// hoãn lại, áp khi rời ô — không mất chữ/focus (bảng ngày vốn không vẽ lại trong renderStats).
+function applyExplainRemote(all) {
+  const ae = document.activeElement;
+  if (ae && ae.classList && (ae.classList.contains("exp-input") || ae.classList.contains("exp-cat"))) { _expPending = all; return; }
+  _expPending = null;
+  explainMap = {};
+  for (const k in all) { const v = all[k] || {}; const id = v.id || k; if (v.c || v.t) explainMap[id] = { c: v.c || "", t: v.t || "" }; }
   localStorage.setItem(LS_EXPLAIN, JSON.stringify(explainMap));
-  return n;
+  if (tickets.size) renderStats();
 }
-// tải toàn bộ giải trình từ server về. CÁCH CHÍNH = fetch() (server trả CORS "*", đọc JSON trực tiếp).
-// JSONP cũ hay fail ở máy user do trình duyệt chặn cookie bên thứ ba / tracking-prevention chặn redirect
-// sang googleusercontent.com của thẻ <script> — dù server hoàn toàn khỏe. fetch không dính lỗi đó.
-function pullExplain(cb, attempt) {
-  attempt = attempt || 1;
-  if (!syncCfg.url) { cb && cb(-1, "chưa cấu hình URL"); return; }
-  const url = syncCfg.url + (syncCfg.url.includes("?") ? "&" : "?") + "_=" + Date.now();
-  const ctrl = ("AbortController" in window) ? new AbortController() : null;
-  const to = setTimeout(() => ctrl && ctrl.abort(), 15000); // Apps Script cold-start có thể chậm
-  fetch(url, ctrl ? { signal: ctrl.signal } : {})
-    .then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); return r.text(); })
-    .then((txt) => {
-      clearTimeout(to);
-      let resp; try { resp = JSON.parse(txt); } catch (e) { throw new Error("dữ liệu trả về không phải JSON"); }
-      if (!resp || !resp.ok || !Array.isArray(resp.rows)) throw new Error("server trả dữ liệu lỗi");
-      cb && cb(applyExplainRows(resp.rows));
-    })
-    .catch(() => { clearTimeout(to); pullExplainJsonp(cb, attempt); }); // fetch fail (proxy lạ) → thử JSONP dự phòng
-}
-// dự phòng: JSONP như cũ, phòng môi trường chặn fetch mà thẻ <script> vẫn chạy; vẫn tự thử lại 1 lần (cold-start)
-function pullExplainJsonp(cb, attempt) {
-  const name = "__giResp_" + Date.now() + "_" + Math.floor(Math.random() * 1e6);
-  let done = false;
-  const s = document.createElement("script");
-  const cleanup = () => { delete window[name]; if (s.parentNode) s.parentNode.removeChild(s); };
-  const fail = (msg) => {
-    if (done) return; done = true; cleanup();
-    if (attempt < 2) setTimeout(() => pullExplain(cb, attempt + 1), 1500);
-    else cb && cb(-1, msg);
-  };
-  window[name] = (resp) => {
-    if (done) return;
-    if (!resp || !resp.ok || !Array.isArray(resp.rows)) { fail("server trả dữ liệu lỗi"); return; }
-    done = true; cleanup();
-    cb && cb(applyExplainRows(resp.rows));
-  };
-  s.src = syncCfg.url + (syncCfg.url.includes("?") ? "&" : "?") + "callback=" + name + "&_=" + Date.now();
-  s.onerror = () => fail("không kết nối được Web App (kiểm tra URL / quyền truy cập Anyone)");
-  document.head.appendChild(s);
-  setTimeout(() => fail("quá thời gian chờ (server phản hồi chậm)"), 10000);
-}
+document.addEventListener("focusout", () => { if (_expPending) setTimeout(() => { if (_expPending) applyExplainRemote(_expPending); }, 150); });
 // ticket quá hạn HOẶC bị VOMS reject, nếu có giải trình khách quan → miễn trừ: SLA tính là ontime ở KPI/%QH toàn dashboard
 // (reject thường vẫn ontime theo solution đầu; giải trình để ca reject-mà-quá-hạn được tính lại thành ontime, và ghi lý do)
 function isExempt(t) { return hasExp(t.id) && (t.zone === "overdue" || (t.rejected && t.zone !== "pending")); }
@@ -690,11 +598,7 @@ function afterLoad() {
   $("f_group").innerHTML = '<option value="">Toàn team</option>' + GROUPS.map((g) => `<option>${g}</option>`).join("");
   if (!afterLoad._hashApplied) { afterLoad._hashApplied = true; applyHash(); } // khôi phục bộ lọc từ URL (nếu mở bằng link đã lưu)
   renderAll();
-  // tự tải giải trình online về khi mở dashboard (nếu đã bật đồng bộ) rồi vẽ lại số
-  if (syncCfg.url && !afterLoad._syncTried) {
-    afterLoad._syncTried = true;
-    pullExplain((n) => { if (n >= 0) { renderStats(); if ($("sync_status")) $("sync_status").textContent = "✓ đã tải " + n + " giải trình từ server lúc " + new Date().toLocaleTimeString("vi"); } });
-  }
+  // giải trình online: listener Firebase (gắn trong startLive) tự áp về explainMap — không cần pull tay
   // tự thử kéo AI QC live 1 lần khi có dữ liệu (im lặng nếu offline)
   if (!qcRows.size && !afterLoad._qcTried) { afterLoad._qcTried = true; loadQCFromGoogle(); }
 }
@@ -1801,33 +1705,7 @@ $("btn_groups").addEventListener("click", () => {
 });
 $("grp_close").addEventListener("click", () => { $("modal").style.display = "none"; renderAll(); });
 
-// ---------- đồng bộ giải trình online ----------
-function syncStatus(msg, ok) { const el = $("sync_status"); if (el) { el.textContent = msg; el.style.color = ok === false ? "var(--red)" : ok === true ? "var(--green)" : "var(--muted)"; } }
-$("btn_sync").addEventListener("click", () => {
-  $("sync_url").value = syncCfg.url || "";
-  $("sync_user").value = syncCfg.user || "";
-  syncStatus(syncCfg.url
-    ? "Đồng bộ đang BẬT (URL đã lưu sẵn). Số giải trình trên máy: " + Object.keys(explainMap).length + (syncCfg.user ? "" : " · gõ tên bạn để ghi ai giải trình")
-    : "Chưa bật đồng bộ — dán URL Web App để bắt đầu.");
-  $("syncmodal").style.display = "flex";
-});
-$("sync_close").addEventListener("click", () => { $("syncmodal").style.display = "none"; });
-$("sync_save").addEventListener("click", () => {
-  const url = $("sync_url").value.trim(), user = $("sync_user").value.trim();
-  if (url && !/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec/.test(url)) { syncStatus("URL không đúng dạng …/exec của Apps Script Web App", false); return; }
-  syncCfg = { url, user };
-  localStorage.setItem(LS_SYNC, JSON.stringify(syncCfg));
-  syncStatus(url ? "✓ đã lưu cấu hình. Tải giải trình về hoặc đẩy lên bên dưới." : "✓ đã tắt đồng bộ.", true);
-});
-$("sync_pull").addEventListener("click", () => {
-  if (!syncCfg.url) { syncStatus("Lưu URL trước đã.", false); return; }
-  syncStatus("đang tải…");
-  pullExplain((n, err) => { if (n < 0) syncStatus("Lỗi: " + err, false); else { if (tickets.size) renderStats(); syncStatus("✓ đã tải " + n + " giải trình về máy này lúc " + new Date().toLocaleTimeString("vi"), true); } });
-});
-$("sync_pushall").addEventListener("click", () => {
-  if (!syncCfg.url) { syncStatus("Lưu URL trước đã.", false); return; }
-  pushAllExplain((n) => syncStatus("✓ đã đẩy " + n + " giải trình lên server (gửi nền, vài giây sau kiểm tra sheet GiaiTrinh)", true));
-});
+// (đồng bộ giải trình giờ chạy tự động qua Firebase — xem fbPushExplain/applyExplainRemote đầu file)
 $("grp_export").addEventListener("click", () => {
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([JSON.stringify(groupMap, null, 2)], { type: "application/json" }));
@@ -1947,7 +1825,6 @@ $("btn_explain_save").addEventListener("click", () => {
   renderStats();
   flashSaved(n);
 });
-$("btn_mirror").addEventListener("click", pushMirror);
 $("btn_copy_report").addEventListener("click", () => {
   const { day, day2, rows, created, byDay } = dailyRows(currentFilter());
   if (!day) return;
@@ -2033,7 +1910,7 @@ $("btn_tv").addEventListener("click", () => {
 });
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
-  ["searchmodal", "modal", "syncmodal"].forEach((id) => { if ($(id)) $(id).style.display = "none"; });
+  ["searchmodal", "modal"].forEach((id) => { if ($(id)) $(id).style.display = "none"; });
   if (document.body.classList.contains("tv")) { document.body.classList.remove("tv"); clearInterval(tvTimer); tvTimer = null; }
 });
 
@@ -2139,6 +2016,9 @@ function startLive() {
       liveDB.ref("dashboard/current").on("value",
         (snap) => { liveData = snap.val(); refreshWeb(); },
         (err) => setLiveStat(false, "Lỗi đọc live: " + err.message));
+      // giải trình dùng chung cả nhóm — realtime, thay kênh Apps Script/Google Sheet cũ
+      fbExpRef = liveDB.ref("dashboard/explain");
+      fbExpRef.on("value", (snap) => applyExplainRemote(snap.val() || {}), () => {});
     });
   } catch (e) { setLiveStat(false, "Firebase lỗi: " + e.message); }
 }
