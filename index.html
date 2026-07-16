@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dashboard điều hành CCTS — SLA & Nhân sự</title>
+<script src="libs/xlsx.full.min.js"></script>
+<script src="libs/chart.umd.min.js"></script>
+<script src="libs/html2canvas.min.js"></script>
+<script src="libs/station_map.js"></script>
+<style>
+:root{
+  --navy:#1a3a5c; --blue:#2e6da4; --green:#2e8b57; --red:#c0392b; --amber:#e67e22;
+  --bg:#f4f6fa; --card:#ffffff; --border:#dde3ec; --text:#1f2d3d; --muted:#7a8699;
+}
+*{box-sizing:border-box; margin:0; padding:0;}
+body{font-family:"Segoe UI",Arial,sans-serif; background:var(--bg); color:var(--text); font-size:13px;}
+header{background:var(--navy); color:#fff; padding:10px 18px; display:flex; align-items:center; gap:14px; flex-wrap:wrap;}
+header h1{font-size:17px; font-weight:600;}
+header .sub{font-size:12px; opacity:.75;}
+#dropzone{border:2px dashed #9fb3c8; border-radius:10px; margin:16px; padding:36px; text-align:center; color:var(--muted); background:#fff; cursor:pointer; transition:.15s;}
+#dropzone.drag{border-color:var(--blue); background:#eef5fc; color:var(--blue);}
+#dropzone b{color:var(--navy); font-size:15px;}
+#dropzone .small{font-size:12px; margin-top:6px; line-height:1.6;}
+#filebar{margin:0 16px; font-size:12px; color:var(--muted);}
+#toolbar{display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap; margin:12px 16px 4px;}
+#toolbar label{display:flex; flex-direction:column; gap:3px; font-size:11px; color:var(--muted); font-weight:600;}
+#toolbar input,#toolbar select{padding:5px 8px; border:1px solid var(--border); border-radius:6px; font-size:13px; background:#fff;}
+#toolbar button{padding:7px 13px; border:none; border-radius:6px; font-size:13px; cursor:pointer; font-weight:600;}
+.btn-blue{background:var(--blue); color:#fff;} .btn-green{background:var(--green); color:#fff;}
+.btn-gray{background:#e4e9f0; color:var(--text);} .btn-navy{background:var(--navy); color:#fff;}
+#cap{padding:6px 16px 24px;}
+.kpis{display:grid; grid-template-columns:repeat(auto-fit,minmax(148px,1fr)); gap:10px; margin:10px 0;}
+.kpi{background:var(--card); border:1px solid var(--border); border-radius:10px; padding:10px 12px;}
+.kpi .t{font-size:11px; color:var(--muted); font-weight:600; text-transform:uppercase;}
+.kpi .v{font-size:22px; font-weight:700; color:var(--navy); margin-top:2px;}
+.kpi .d{font-size:11px; margin-top:2px;}
+.kpi.k-good{border-left:4px solid var(--green); background:#f2faf5;}
+.kpi.k-warn{border-left:4px solid var(--amber); background:#fdf8ee;}
+.kpi.k-bad{border-left:4px solid var(--red); background:#fdf1ef;}
+.up{color:var(--green);} .down{color:var(--red);} .flat{color:var(--muted);}
+.grid2{display:grid; grid-template-columns:1fr 1fr; gap:12px;}
+@media(max-width:1000px){.grid2{grid-template-columns:1fr;}}
+.grid3{display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-top:10px;}
+.grid3 .card{margin-top:0; padding:8px 10px;}
+.grid3 .card h2{font-size:12.5px; margin-bottom:4px;}
+@media(max-width:1250px){.grid3{grid-template-columns:1fr 1fr;}}
+@media(max-width:820px){.grid3{grid-template-columns:1fr;}}
+.chartbox-s{position:relative; height:200px;}
+.card{background:var(--card); border:1px solid var(--border); border-radius:10px; padding:12px; margin-top:12px;}
+.card h2{font-size:14px; color:var(--navy); margin-bottom:8px; display:flex; justify-content:space-between; align-items:center;}
+.card h2 .note{font-size:11px; color:var(--muted); font-weight:400;}
+.chartbox{position:relative; height:280px;}
+table{width:100%; border-collapse:collapse; font-size:12.5px;}
+th,td{padding:5px 7px; border-bottom:1px solid var(--border); text-align:right; white-space:nowrap;}
+th{background:#eef2f8; color:var(--navy); cursor:pointer; user-select:none; position:sticky; top:0;}
+th:first-child,td:first-child{text-align:left;}
+th:nth-child(2),td:nth-child(2){text-align:left;}
+tr:hover td{background:#f4f8fd;}
+tr.rollup td{background:#e9eff7; font-weight:700;}
+tr.total td{background:var(--navy); color:#fff; font-weight:700;}
+td.bad{background:#fdecea; color:var(--red); font-weight:700;}
+td.warn{background:#fdf3e3; color:var(--amber); font-weight:700;}
+.tablewrap{max-height:520px; overflow:auto;}
+.heat{font-size:12px;}
+.heat td{text-align:center;}
+.heat td.h1{background:#fff5f5;} .heat td.h2{background:#fbd9d3;} .heat td.h3{background:#f5a898;} .heat td.h4{background:#e2604c; color:#fff;}
+#modal,#syncmodal,#searchmodal{position:fixed; inset:0; background:rgba(20,30,45,.55); display:none; align-items:center; justify-content:center; z-index:50;}
+#modal .box,#syncmodal .box,#searchmodal .box{background:#fff; border-radius:12px; padding:18px; width:520px; max-height:82vh; overflow:auto;}
+#modal h3,#syncmodal h3,#searchmodal h3{color:var(--navy); margin-bottom:10px; font-size:15px;}
+.srow{border:1px solid var(--border); border-radius:8px; padding:8px 10px; margin-bottom:8px;}
+.srow .sh{font-weight:700; color:var(--navy); display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap;}
+.srow .sl{color:var(--muted); margin-top:3px; line-height:1.55;}
+.srow .stl{margin-top:4px; border-top:1px dashed var(--border); padding-top:4px;}
+#af_bar .chip{display:inline-flex; align-items:center; gap:6px; padding:3px 6px 3px 10px; border-radius:14px; background:#eef5fc; color:var(--blue); font-size:12px; font-weight:600; border:1px solid #cfe0f3;}
+#af_bar .chip b{color:var(--navy);}
+#af_bar .chip .x{cursor:pointer; font-weight:700; padding:0 4px; border-radius:8px;}
+#af_bar .chip .x:hover{background:#d6e6f7;}
+body.tv #toolbar,body.tv #filebar,body.tv #dropzone,body.tv footer,body.tv .card h2 .note{display:none !important;}
+body.tv{font-size:15px;}
+/* bản LIVE (đọc realtime từ Firebase): ẩn ô nạp file + panel phân tích cần lịch sử/vật tư/solution */
+body.live #dropzone,body.live #filebar,body.live #btn_clear{display:none !important;}
+body.live .hist-only{display:none !important;}
+body.live [data-tab="parts"]{display:none !important;}
+#livestat{display:flex;align-items:center;gap:6px;}
+#livestat .dot{width:9px;height:9px;border-radius:50%;background:#8fa3b8;}
+#livestat.on .dot{background:#37d67a;box-shadow:0 0 0 0 rgba(55,214,122,.6);animation:pulse 2s infinite;}
+#livestat.off .dot{background:var(--red);}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(55,214,122,.6);}70%{box-shadow:0 0 0 7px rgba(55,214,122,0);}100%{box-shadow:0 0 0 0 rgba(55,214,122,0);}}
+body.tv .kpi .v{font-size:30px;}
+body.tv header h1{font-size:22px;}
+body.tv .kpi .t{font-size:12px;}
+#modal table td{text-align:left;}
+#modal select{padding:3px 6px; border:1px solid var(--border); border-radius:5px;}
+#modal .row,#syncmodal .row{display:flex; gap:8px; margin-top:12px; justify-content:flex-end; flex-wrap:wrap;}
+#syncmodal label{display:flex; flex-direction:column; gap:3px; font-size:12px; font-weight:600; color:var(--muted); margin-top:8px;}
+#syncmodal input{padding:6px 8px; border:1px solid var(--border); border-radius:6px; font-size:13px;}
+.pill{display:inline-block; padding:1px 8px; border-radius:10px; font-size:11px; font-weight:700;}
+.p3{background:#dbeafe; color:#1d4ed8;} .p4{background:#dcfce7; color:#15803d;}
+.p7{background:#fef3c7; color:#b45309;} .p48{background:#e5e7eb; color:#374151;}
+footer{padding:8px 16px 20px; color:var(--muted); font-size:11px;}
+#tabs{display:flex; gap:4px; margin:8px 16px 0; border-bottom:2px solid var(--border); flex-wrap:wrap;}
+#tabs .tab{padding:8px 16px; border:none; background:none; font-size:13.5px; font-weight:600; color:var(--muted); cursor:pointer; border-bottom:3px solid transparent; margin-bottom:-2px;}
+#tabs .tab.active{color:var(--navy); border-bottom-color:var(--blue);}
+#tabs .tab:hover{color:var(--navy);}
+.chips{display:flex; gap:6px; flex-wrap:wrap; margin:4px 0 8px;}
+.chips button{padding:4px 12px; border:1px solid var(--border); background:#fff; border-radius:14px; font-size:12px; cursor:pointer; color:var(--muted);}
+.chips button.active{background:var(--blue); color:#fff; border-color:var(--blue); font-weight:600;}
+#dash{display:none;}
+</style>
+</head>
+<body>
+<header>
+  <h1>📊 Dashboard điều hành CCTS — SLA &amp; Nhân sự</h1>
+  <span class="sub" id="hdrinfo">Chưa có dữ liệu</span>
+  <span class="sub" id="livestat" style="display:none"><span class="dot"></span><span id="livetxt">Đang kết nối…</span></span>
+</header>
+
+<div id="dropzone">
+  <b>Kéo &amp; thả file export CCTS (…_Tickets.xlsx) vào đây — hoặc bấm để chọn file</b>
+  <div class="small">
+    Chọn được nhiều file cùng lúc (nhiều kỳ export) — hệ thống tự khử trùng lặp theo Ticket ID, file mới nhất thắng.<br>
+    Dữ liệu xử lý hoàn toàn trên máy này, không gửi đi đâu, không tốn token.
+  </div>
+  <input type="file" id="fileinput" accept=".xlsx" multiple style="display:none">
+</div>
+<div id="filebar"></div>
+
+<div id="dash">
+<div id="toolbar">
+  <label>🔎 Tra cứu<input id="q_search" placeholder="mã ticket · trạm · S/N trụ…" style="min-width:210px" title="Gõ để tra nhanh 1 ticket / trạm / trụ: trạng thái, người xử lý, solution, giải trình, tái phát"></label>
+  <label>📅 Chọn nhanh<select id="f_quick">
+    <option value="">Tự chọn</option>
+    <option value="thisweek">Tuần này</option>
+    <option value="lastweek">Tuần trước</option>
+    <option value="thismonth">Tháng này</option>
+    <option value="last30">30 ngày gần nhất</option>
+    <option value="all">Toàn bộ dữ liệu</option>
+  </select></label>
+  <label>Từ ngày<input type="date" id="f_from"></label>
+  <label>Đến ngày<input type="date" id="f_to"></label>
+  <label>Chu kỳ biểu đồ<select id="f_gran"><option value="day">Ngày</option><option value="week">Tuần</option><option value="month">Tháng</option></select></label>
+  <label>Thiết bị<select id="f_dev">
+    <option value="">Tất cả</option>
+    <option value="BSS">BSS — tất cả</option>
+    <option value="BSS_06">&nbsp;&nbsp;BSS_06</option>
+    <option value="BSS_12">&nbsp;&nbsp;BSS_12</option>
+    <option value="EVCS">EVCS — tất cả</option>
+    <option value="AC">&nbsp;&nbsp;EVCS AC</option>
+    <option value="DC">&nbsp;&nbsp;EVCS DC — tất cả</option>
+    <option value="Kern">&nbsp;&nbsp;&nbsp;&nbsp;DC Kern</option>
+    <option value="Core mini">&nbsp;&nbsp;&nbsp;&nbsp;DC Core mini</option>
+    <option value="Core">&nbsp;&nbsp;&nbsp;&nbsp;DC Core</option>
+  </select></label>
+  <label>Khu<select id="f_group"><option value="">Toàn team</option></select></label>
+  <label>Người<select id="f_person"><option value="">Tất cả</option></select></label>
+  <label>Bảng theo<select id="f_level"><option value="person">Người</option><option value="group">Khu</option></select></label>
+  <button class="btn-gray" id="btn_groups">⚙ Phân khu nhân sự</button>
+  <button class="btn-gray" id="btn_sync">☁ Đồng bộ giải trình</button>
+  <button class="btn-green" id="btn_xlsx">⬇ Xuất Excel</button>
+  <button class="btn-navy" id="btn_png">🖼 Xuất ảnh PNG</button>
+  <button class="btn-gray" id="btn_tv" title="Chế độ màn hình lớn (TV): ẩn công cụ, tự xoay tab mỗi 30s. Bấm lại hoặc Esc để thoát">🖥 TV</button>
+  <button class="btn-gray" id="btn_clear" title="Xóa dữ liệu đã lưu trên máy này (IndexedDB) rồi tải lại trang">🗑 Xóa dữ liệu</button>
+</div>
+<div id="af_bar" style="margin:4px 16px 0;display:none;gap:6px;align-items:center;flex-wrap:wrap"></div>
+
+<div id="tabs">
+  <button class="tab active" data-tab="ops">📊 Điều hành</button>
+  <button class="tab" data-tab="quality">🔧 Chất lượng xử lý</button>
+  <button class="tab" data-tab="parts">📦 Vật tư</button>
+  <button class="tab" data-tab="qc">🤖 AI QC</button>
+</div>
+
+<div id="cap">
+<section class="panel" data-panel="ops">
+  <div class="kpis" id="kpis"></div>
+
+  <div class="grid3">
+    <div class="card hist-only">
+      <h2>📐 %Ontime theo nhóm SLA <span class="note">sau miễn trừ giải trình</span></h2>
+      <div class="chartbox-s"><canvas id="c_slaon"></canvas></div>
+    </div>
+    <div class="card hist-only">
+      <h2>📈 Ticket mới &amp; %quá hạn <span class="note">nét đứt = chưa chốt (còn ticket trong hạn 48h)</span></h2>
+      <div class="chartbox-s"><canvas id="c_odday"></canvas></div>
+    </div>
+    <div class="card">
+      <h2>📊 Workload nhân sự
+        <span style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;font-weight:normal;font-size:11px">
+          <span class="note" id="wl_note"></span>
+          ĐM<input type="number" id="wl_norm" value="5" min="0.5" step="0.5" style="width:44px;padding:2px 4px;border:1px solid var(--border);border-radius:4px;font-size:11px">/ngày
+          3h×<input type="number" id="wl_w3" value="2" min="1" step="0.1" style="width:38px;padding:2px 3px;border:1px solid var(--border);border-radius:4px;font-size:11px">
+          4h×<input type="number" id="wl_w4" value="1.5" min="1" step="0.1" style="width:38px;padding:2px 3px;border:1px solid var(--border);border-radius:4px;font-size:11px">
+          7h×<input type="number" id="wl_w7" value="1.2" min="1" step="0.1" style="width:38px;padding:2px 3px;border:1px solid var(--border);border-radius:4px;font-size:11px">
+        </span>
+      </h2>
+      <div class="chartbox-s"><canvas id="c_wl"></canvas></div>
+    </div>
+    <div class="card">
+      <h2>⏳ Quá hạn đang kẹt ở đâu <span class="note">nhóm giữ ticket</span></h2>
+      <div class="chartbox-s"><canvas id="c_stuck"></canvas></div>
+    </div>
+    <div class="card">
+      <h2>🔧 Top mã lỗi (Pareto) <span class="note">lỗi hệ thống cần khắc phục</span></h2>
+      <div class="chartbox-s"><canvas id="c_err"></canvas></div>
+    </div>
+    <div class="card hist-only">
+      <h2>📦 Vật tư tiêu hao <span class="note">SL xuất good / thu broken</span></h2>
+      <div class="chartbox-s"><canvas id="c_parts"></canvas></div>
+    </div>
+  </div>
+
+  <div class="card hist-only">
+    <h2>📅 Xu hướng dài hạn theo tháng <span class="note">toàn bộ dữ liệu đã nạp (KHÔNG theo khoảng lọc ngày) · %quá hạn sau miễn trừ · để thấy team đang tốt lên hay xấu đi</span></h2>
+    <div class="chartbox"><canvas id="c_trend"></canvas></div>
+  </div>
+
+  <div class="card">
+    <h2>🎯 Ticket cần ưu tiên hôm nay <span class="note">ticket đang mở chưa xử lý xong: Open · Pending for spare parts · Appointment · theo khoảng lọc trên thanh công cụ · gần hết hạn / đã quá hạn xếp trước</span></h2>
+    <div id="pri_sum" style="font-size:13px;margin-bottom:8px"></div>
+    <div class="tablewrap" style="max-height:420px"><table id="priority"></table></div>
+  </div>
+
+  <div class="card">
+    <h2>📋 Giải trình tích hợp — mọi nhóm SLA (3h/4h/48h) theo ngày
+      <span style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <span class="note" id="d_saved"></span>
+        <select id="d_quick" style="padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:12.5px">
+          <option value="">Chọn nhanh…</option>
+          <option value="latest">Ngày mới nhất</option>
+          <option value="yesterday">Hôm qua</option>
+          <option value="thisweek">Tuần này</option>
+          <option value="lastweek">Tuần trước</option>
+          <option value="last7">7 ngày gần nhất</option>
+        </select>
+        <input type="date" id="d_day" style="padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-size:12.5px">
+        <span style="font-size:12px;color:var(--muted)">→</span>
+        <input type="date" id="d_day2" title="Để trống = chỉ xem 1 ngày" style="padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-size:12.5px">
+        <button class="btn-blue" id="btn_explain_save" style="padding:4px 10px;font-size:12px">💾 Lưu giải trình</button>
+        <button class="btn-gray" id="btn_copy_report" style="padding:4px 10px;font-size:12px">📋 Copy báo cáo gửi quản lý</button>
+        <button class="btn-blue" id="btn_mirror" style="padding:4px 10px;font-size:12px" title="Ghi toàn bộ danh sách bảng này (mọi nhóm SLA trong khoảng ngày, đủ 19 cột) lên sheet online GiaiTrinh — đè theo Ticket ID, dòng của ticket khác trên sheet GIỮ NGUYÊN">☁ Ghi đè sheet online</button>
+        <button class="btn-green" id="btn_daily" style="padding:4px 10px;font-size:12px">⬇ Xuất Excel (theo lựa chọn)</button>
+        <button class="btn-green" id="btn_3h_report" style="padding:4px 10px;font-size:12px" title="Xuất toàn bộ ticket mọi nhóm SLA (3h/4h/7h/12h/48h) trong kỳ lọc, kèm giải trình">⬇ Xuất toàn bộ ticket</button>
+      </span>
+    </h2>
+    <div id="exp_chips" class="chips">
+      <button data-k="" class="active">Tất cả nhóm</button>
+      <button data-k="fast">Nhanh 3h · 4h/7h</button>
+      <button data-k="48">Chỉ 48h</button>
+    </div>
+    <div id="d_sum" style="font-size:13px;margin-bottom:8px"></div>
+    <div class="tablewrap" style="max-height:420px"><table id="daily"></table></div>
+  </div>
+
+  <div class="card">
+    <h2>📐 SLA Matrix — bảng chi tiết theo nhóm dịch vụ
+      <span style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <span class="note">V1=3h · V2=4h (thay LK 7h) · V3=7h (thay LK 12h) · còn lại 48h · kèm FTF/Reject</span>
+        <button class="btn-gray" id="btn_slam_toggle" style="padding:4px 10px;font-size:12px">Xem bảng ▾</button>
+      </span>
+    </h2>
+    <div id="slam_wrap" style="display:none"><div class="tablewrap" style="max-height:340px"><table id="slamatrix"></table></div></div>
+  </div>
+
+  <div class="card hist-only">
+    <h2>Hiệu suất nhân sự — bảng chi tiết
+      <span style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <span class="note" id="perf_note"></span>
+        <button class="btn-gray" id="btn_perf_toggle" style="padding:4px 10px;font-size:12px">Xem bảng ▾</button>
+      </span>
+    </h2>
+    <div id="perf_wrap" style="display:none"><div class="tablewrap"><table id="perf"></table></div></div>
+  </div>
+
+  <div class="card">
+    <h2>⏳ Quá hạn kẹt ở đâu — bảng chi tiết theo trạng thái
+      <span style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <span class="note">phân nhóm theo quy ước báo cáo tuần CCVN (ASP / CCVN / vật tư / VOMS)</span>
+        <button class="btn-gray" id="btn_stuck_toggle" style="padding:4px 10px;font-size:12px">Xem bảng ▾</button>
+      </span>
+    </h2>
+    <div id="stuck_wrap" style="display:none"><div class="tablewrap" style="max-height:380px"><table id="stuck"></table></div></div>
+  </div>
+
+</section>
+
+<section class="panel" data-panel="quality" style="display:none">
+  <div class="card">
+    <h2>Tái phát / xử lý lại <span class="note">cùng trụ (S/N) + cùng mã lỗi sau Permanent solution — 2 mốc 7 &amp; 30 ngày</span></h2>
+    <div class="grid2">
+      <div><h2 style="font-size:12.5px">Theo người xử lý trước đó</h2><div class="tablewrap" style="max-height:260px"><table id="rep_person"></table></div></div>
+      <div><h2 style="font-size:12.5px">Theo trụ (trạm · S/N) × mã lỗi</h2><div class="tablewrap" style="max-height:260px"><table id="rep_err"></table></div></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Mã lỗi × Khu xử lý
+      <span style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <span class="note" style="color:var(--amber)">⚠ chỉ chính xác khi phân khu nhân sự đã đầy đủ — hiện còn thiếu người nên heatmap có thể gây hiểu nhầm</span>
+        <button class="btn-gray" id="btn_heat_toggle" style="padding:4px 10px;font-size:12px">Hiện heatmap ▾</button>
+      </span>
+    </h2>
+    <div id="heat_wrap" style="display:none"><div class="tablewrap" style="max-height:280px"><table id="heat" class="heat"></table></div></div>
+  </div>
+</section>
+
+<section class="panel" data-panel="parts" style="display:none">
+  <div class="card">
+    <h2>📦 Đối soát vật tư kho <span class="note">lệch tổng good/broken CHẤP NHẬN được (2 dòng nhập khác nhau, chỉ ghi nhận) — vi phạm = AI QC đối chiếu vật tư khai với ảnh hiện trường KHÔNG khớp</span></h2>
+    <div id="parts_sum" style="font-size:13px;margin-bottom:8px"></div>
+    <h2 style="font-size:12.5px">Rollup theo người <span class="note">biểu đồ vật tư tiêu hao nằm ở tab Điều hành (màn hình 1)</span></h2>
+    <div class="tablewrap" style="max-height:280px"><table id="parts_person"></table></div>
+    <h2 style="font-size:12.5px;margin-top:10px">Chi tiết vi phạm (AI: vật tư không khớp ảnh)</h2>
+    <div class="tablewrap" style="max-height:240px"><table id="parts"></table></div>
+  </div>
+
+  <div class="card">
+    <h2>🔮 Dự báo vật tư &amp; bảo trì phòng ngừa <span class="note">ngoại suy tần suất tiêu hao trong kỳ lọc (heuristic, không phải mô hình mùa vụ) · trụ tái phát nhiều = cần bảo trì phòng ngừa</span></h2>
+    <div class="grid2">
+      <div><h2 style="font-size:12.5px">Dự báo nhu cầu vật tư (4 tuần tới)</h2><div class="tablewrap" style="max-height:300px"><table id="parts_forecast"></table></div></div>
+      <div><h2 style="font-size:12.5px">Trụ cần bảo trì phòng ngừa (tái phát nhiều)</h2><div class="tablewrap" style="max-height:300px"><table id="preventive"></table></div></div>
+    </div>
+  </div>
+</section>
+
+<section class="panel" data-panel="qc" style="display:none">
+  <div class="card">
+    <h2>🤖 AI QC solution (ver 3 + Phase 1)
+      <span style="display:flex;gap:8px;align-items:center">
+        <span class="note" id="qc_status">chưa tải</span>
+        <button class="btn-blue" id="btn_qc" style="padding:4px 10px;font-size:12px">🔄 Tải từ Google Sheet</button>
+        <button class="btn-green" id="btn_qc04" style="padding:4px 10px;font-size:12px" title="Xuất 1 workbook gộp AI QC + SLA + overdue + vật tư theo kỳ lọc, để gửi quản lý/VG (QC-04)">⬇ Báo cáo QC (tuần/tháng)</button>
+      </span>
+    </h2>
+    <div id="qc_body" style="display:none">
+      <div class="kpis" id="qc_kpis"></div>
+      <div class="grid2">
+        <div><h2 style="font-size:12.5px">Theo người xử lý (join Ticket ID với export)</h2><div class="tablewrap" style="max-height:240px"><table id="qc_person"></table></div></div>
+        <div><h2 style="font-size:12.5px">Kịch bản xử lý (AI chọn)</h2><div class="tablewrap" style="max-height:240px"><table id="qc_items"></table></div></div>
+      </div>
+      <h2 style="font-size:12.5px;margin-top:10px">Ticket bị AI cảnh báo / đánh INVALID (mới nhất trước)</h2>
+      <div class="tablewrap" style="max-height:260px"><table id="qc_list"></table></div>
+    </div>
+    <div id="qc_empty" class="note" style="color:var(--muted)">Bấm "Tải từ Google Sheet" (cần mạng) — hoặc kéo file xlsx export của sheet AI QC vào ô nạp file phía trên.</div>
+  </div>
+</section>
+</div>
+</div>
+
+<div id="modal"><div class="box">
+  <h3>Phân khu nhân sự (lưu tự động trên máy này)</h3>
+  <table id="grp_table"></table>
+  <div class="row">
+    <button class="btn-gray" id="grp_export">Xuất JSON</button>
+    <button class="btn-gray" id="grp_import">Nhập JSON</button>
+    <input type="file" id="grp_file" accept=".json" style="display:none">
+    <button class="btn-blue" id="grp_close">Xong</button>
+  </div>
+</div></div>
+
+<div id="syncmodal"><div class="box">
+  <h3>☁ Đồng bộ giải trình online (nhiều người dùng chung)</h3>
+  <div style="font-size:12.5px;color:var(--muted);line-height:1.6">
+    Giải trình hiện lưu trên từng máy. Để lưu giữ lâu dài &amp; đồng bộ giữa nhiều người: triển khai file <b>apps_script_giai_trinh.gs</b> (nằm trong thư mục dashboard — có hướng dẫn cài từng bước) lên Apps Script của Google Sheet, lấy URL Web App dạng <b>…/exec</b> rồi dán vào đây. Sau đó mỗi lần lưu giải trình sẽ <b>tự đẩy lên</b>; bấm <b>Tải giải trình về</b> để lấy phần người khác nhập. Cả nhóm dán CÙNG một URL, mỗi người gõ tên riêng.
+  </div>
+  <label>URL Web App (…/exec)
+    <input id="sync_url" placeholder="https://script.google.com/macros/s/…/exec">
+  </label>
+  <label>Tên người nhập (ghi ai giải trình)
+    <input id="sync_user" placeholder="vd: hungvu">
+  </label>
+  <div id="sync_status" style="font-size:12.5px;margin-top:10px;min-height:16px"></div>
+  <div class="row">
+    <button class="btn-gray" id="sync_pull">⬇ Tải giải trình về</button>
+    <button class="btn-gray" id="sync_pushall">⬆ Đẩy toàn bộ máy này lên</button>
+    <button class="btn-green" id="sync_save">💾 Lưu cấu hình</button>
+    <button class="btn-navy" id="sync_close">Đóng</button>
+  </div>
+</div></div>
+
+<div id="searchmodal"><div class="box" style="width:640px">
+  <h3>🔎 Kết quả tra cứu <span id="search_n" style="font-weight:400;font-size:12px;color:var(--muted)"></span></h3>
+  <div id="search_body" style="font-size:12.5px"></div>
+  <div class="row"><button class="btn-navy" id="search_close">Đóng</button></div>
+</div></div>
+
+<footer>SLA vùng (cập nhật 07/07/2026): phạm vi SLA nhanh = trạm Hà Nội hình thức Tự doanh (file CCG chia vùng) VÀ ticket có Ticket Source = API creation — Vùng 1: 3h; Vùng 2: 4h, thay linh kiện 7h; Vùng 3: 7h, thay linh kiện 12h; ticket nguồn khác (Platform/Template) hoặc trạm ngoài phạm vi: 48h (theo cờ SLA Status của CCTS). Ontime nhóm 3h/4h/7h/12h = solution đầu tiên (ưu tiên Permanent) trong hạn; riêng 3h áp rule cửa sổ trạng thái Open → Pending for VOMS confirm (CSE duyệt phương án), các trạng thái sau không tính. Người xử lý = Processor của solution. Ticket quá hạn có giải trình khách quan (gõ ở bảng case-by-case) được miễn trừ khỏi %Ontime/%QH toàn dashboard — lưu trên máy này.</footer>
+
+<!-- Firebase (bản LIVE): tải từ CDN gstatic — chỉ dùng khi FIREBASE_CONFIG != null -->
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-database-compat.js"></script>
+<script src="config.js?v=20260716a"></script>
+<script src="app.js?v=20260716a"></script>
+</body>
+</html>
