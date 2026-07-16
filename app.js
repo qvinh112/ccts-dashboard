@@ -450,17 +450,20 @@ function deriveAll() {
     const w = vomsWin.get(t.id);
     t.openToVomsH = (w && w.openT && w.vomsT && w.vomsT >= w.openT) ? (w.vomsT - w.openT) / HOURS : null;
 
-    // ontime/overdue (rule 16/07/2026): vòng đời Open → KTV xử lý → nhấn Resolve (= bước Open→VOMS).
-    // Resolve THỰC = cửa sổ Open → Pending for VOMS confirm, nên nhóm 3h/4h tính SLA theo Open→VOMS
-    // (không phải giờ ghi Solution — mốc đó là "solution muộn", khác resolve). Thiếu mốc Open→VOMS thì
-    // mới fallback về giờ solution đầu. 7h/12h vẫn theo solution đầu (rule 02/07); 48h giữ cờ SLA của CCTS.
+    // ontime/overdue (rule 16/07/2026 v2): vòng đời Open → KTV xử lý → nhấn Resolve.
+    // Nhóm 3h/4h chỉ QUÁ HẠN khi CẢ HAI mốc đều vượt SLA: giờ xử lý (Tạo→Solution đầu) VÀ
+    // Open→VOMS (Open→Pending for VOMS confirm). Chỉ 1 trong 2 đúng hạn → Đạt (KTV xử lý đúng
+    // hạn, hoặc resolve thực đúng hạn). Thiếu mốc Open→VOMS → theo giờ xử lý. 7h/12h vẫn theo
+    // solution đầu (rule 02/07); 48h giữ cờ SLA của CCTS.
     const isFast = t.slaClass === "3h" || t.slaClass === "4h";
     if (t.slaClass === "48h") {
       t.zone = /overdue/i.test(t.slaCCTS) ? "overdue" : (/ontime/i.test(t.slaCCTS) ? "ontime" : "pending");
-    } else if (isFast && t.openToVomsH != null) {
-      t.zone = t.openToVomsH <= t.limitH ? "ontime" : "overdue";           // resolve thực = Open→VOMS
+    } else if (isFast && first) {
+      const durLate = (first.t - t.createT) > t.limitH * HOURS;                    // giờ xử lý (Solution) trễ
+      const vomsLate = t.openToVomsH != null ? t.openToVomsH > t.limitH : durLate;  // Open→VOMS trễ (thiếu data → theo giờ xử lý)
+      t.zone = (durLate && vomsLate) ? "overdue" : "ontime";                        // chỉ quá hạn khi CẢ HAI trễ
     } else if (first) {
-      t.zone = (first.t - t.createT) <= t.limitH * HOURS ? "ontime" : "overdue"; // fallback / 7h/12h: giờ solution đầu
+      t.zone = (first.t - t.createT) <= t.limitH * HOURS ? "ontime" : "overdue"; // 7h/12h: giờ solution đầu
     } else {
       // chưa có solution: đã quá hạn tính đến giờ → overdue, chưa thì pending
       t.zone = (Date.now() - t.createT) > t.limitH * HOURS ? "overdue" : "pending";
@@ -759,12 +762,18 @@ const inExpSel = (t) => (expSel === "fast" ? t.limitH < 48 : expSel === "48" ? t
 const isOverVoms = (t) => (t.slaClass === "3h" || t.slaClass === "4h") && t.openToVomsH != null && t.openToVomsH > t.limitH;
 const needExplain = (t) => t.zone === "overdue" || t.rejected || isOverVoms(t);
 // phân loại TÌNH HUỐNG của ca giải trình — 1 nhãn chính, ưu tiên (nặng→nhẹ):
-// resolve muộn > lỗi hệ thống (status "Pending for others") > VOMS reject.
-// LƯU Ý vòng đời: Open → KTV xử lý → nhấn Resolve (= bước Open→VOMS). Nhấn resolve trễ
-// TỨC LÀ resolve muộn → "giờ xử lý muộn"/Open→VOMS vượt SLA và "resolve muộn" là MỘT.
-const EXP_SCN = { "Lỗi hệ thống": "#8e44ad", "Resolve muộn": COL.red, "VOMS reject": "#16a085" };
+// xử lý muộn > resolve muộn > lỗi hệ thống (status "Pending for others") > VOMS reject.
+// LƯU Ý vòng đời: Open → KTV xử lý → nhấn Resolve (= bước Open→VOMS).
+//  · "Giờ xử lý" = create → solution đầu. Giờ xử lý VƯỢT hạn SLA ⇒ "Xử lý muộn".
+//  · "Resolve muộn" chỉ dành cho ca giờ xử lý CÒN trong hạn nhưng bước nhấn Resolve
+//    (Open→VOMS) trễ vượt SLA — tức resolve trễ chứ không phải xử lý trễ.
+const EXP_SCN = { "Xử lý muộn": COL.red, "Resolve muộn": COL.amber, "Lỗi hệ thống": "#8e44ad", "VOMS reject": "#16a085" };
+// giờ xử lý (create → solution đầu), null nếu chưa có solution
+const procHours = (t) => t.refSol ? (t.refSol.t - t.createT) / 3600000 : null;
 function explainScenario(t) {
-  if (t.zone === "overdue" || isOverVoms(t)) return "Resolve muộn";      // resolve trễ (Open→VOMS vượt giờ SLA) — ưu tiên trước
+  const dh = procHours(t);
+  if (dh != null && dh > t.limitH) return "Xử lý muộn";                 // giờ xử lý vượt hạn → xử lý muộn (KHÔNG phải resolve muộn)
+  if (t.zone === "overdue" || isOverVoms(t)) return "Resolve muộn";      // giờ xử lý còn trong hạn nhưng resolve trễ (Open→VOMS vượt SLA)
   if (t.status === "Pending for others") return "Lỗi hệ thống";         // đang treo "Pending for others" (VOMS/hệ thống giữ)
   if (t.rejected) return "VOMS reject";                                 // bị VOMS trả về Open / Close rejected
   return "Resolve muộn";                                                // dự phòng (needExplain đảm bảo đã dính ≥1)
@@ -793,7 +802,7 @@ function renderDaily(f) {
   dailySummary(rows, created, byDay, multi);
   const order = { "3h": 0, "4h": 1, "7h": 2, "12h": 3, "48h": 4 };
   rows.sort((a, b) => (multi ? dayKey(a.createT).localeCompare(dayKey(b.createT)) : 0) || (order[a.slaClass] ?? 9) - (order[b.slaClass] ?? 9) || b.createT - a.createT);
-  $("daily").innerHTML = "<thead><tr><th>Ticket</th><th>Ticket ID</th><th>External ticket id</th><th>Trạm</th><th>Mã lỗi</th><th>Nhóm</th><th>Tạo lúc</th><th>Solution đầu</th><th>Giờ xử lý / hạn</th><th title=\"Thời gian từ trạng thái Open đến Pending for VOMS confirm, lấy trong Events Record — chỉ áp nhóm 3h/4h\">Open→VOMS</th><th>Kết quả</th><th>Người</th><th>Khu</th><th>Trạng thái</th><th title=\"Phân loại tình huống: Resolve muộn / Pending for other (treo bên thứ 3) / VOMS reject\">Tình huống</th><th style=\"min-width:160px\">Cần giải trình vì</th><th style=\"min-width:200px\">Giải trình khách quan (CSE gõ)</th></tr></thead><tbody>" +
+  $("daily").innerHTML = "<thead><tr><th>Ticket</th><th>Ticket ID</th><th>External ticket id</th><th>Trạm</th><th>Mã lỗi</th><th>Nhóm</th><th>Tạo lúc</th><th>Solution đầu</th><th>Giờ xử lý / hạn</th><th title=\"Thời gian từ trạng thái Open đến Pending for VOMS confirm, lấy trong Events Record — chỉ áp nhóm 3h/4h\">Open→VOMS</th><th>Kết quả</th><th>Người</th><th>Khu</th><th>Trạng thái</th><th title=\"Phân loại tình huống: Xử lý muộn (giờ xử lý vượt hạn) / Resolve muộn (Open→VOMS trễ) / Lỗi hệ thống (treo bên thứ 3) / VOMS reject\">Tình huống</th><th style=\"min-width:160px\">Cần giải trình vì</th><th style=\"min-width:200px\">Giải trình khách quan (CSE gõ)</th></tr></thead><tbody>" +
     rows.map((t) => {
       const dur = t.refSol ? Math.round((t.refSol.t - t.createT) / 360000) / 10 : null;
       const wait = t.refSol ? null : Math.round((Date.now() - t.createT) / 360000) / 10; // chưa xử lý: đã treo bao lâu tính đến giờ
@@ -838,12 +847,12 @@ function renderDaily(f) {
 
 // --- Dashboard giải trình: 3 biểu đồ tròn (doughnut) xem THÀNH PHẦN các ca cần giải trình ---
 // (1) tỉ lệ Quá hạn/Đạt/Chưa có KQ trên TOÀN BỘ ticket tạo trong kỳ
-// (2) theo TÌNH HUỐNG (Resolve muộn / Lỗi hệ thống / VOMS reject) — đã/chưa giải trình để trong tooltip
+// (2) theo TÌNH HUỐNG (Xử lý muộn / Resolve muộn / Lỗi hệ thống / VOMS reject) — đã/chưa giải trình để trong tooltip
 // (3) theo NGUYÊN NHÂN khách quan CSE đã phân loại (EXPLAIN_CATS)
 const PIE = ["#2e6da4", "#2e8b57", "#e67e22", "#c0392b", "#8e44ad", "#16a085", "#f39c12", "#2c3e50", "#d35400", "#27ae60"];
 function renderExplainDash(rows, all) {
   if (!$("c_exp_scn") || !$("c_exp_cat")) return; // chưa có canvas (vd bản live) → bỏ qua
-  const scns = ["Resolve muộn", "Lỗi hệ thống", "VOMS reject"];
+  const scns = ["Xử lý muộn", "Resolve muộn", "Lỗi hệ thống", "VOMS reject"];
   const scnN = {}, done = {}, undone = {};
   for (const s of scns) { scnN[s] = 0; done[s] = 0; undone[s] = 0; }
   const catCount = {}; for (const c of EXPLAIN_CATS) catCount[c] = 0; catCount["(chưa phân loại)"] = 0;
