@@ -38,7 +38,7 @@ const LS_EXPLAIN = "ccts_dash_explain_v1";
 let syncUser = "";
 try { syncUser = (JSON.parse(localStorage.getItem("ccts_dash_sync_v1") || "{}").user) || ""; } catch (e) {}
 // phân loại nguyên nhân khách quan (theo các nhóm miễn trừ đã dùng trong báo cáo SLA3h + disclaim của CCVN)
-const EXPLAIN_CATS = ["Trạm đêm đóng cửa (22h–6h)", "Thời tiết / thiên tai", "Hạ tầng điện / mạng", "Không tiếp cận được trạm", "Chờ vật tư", "Lỗi hệ thống VOMS/CCTS", "Khách quan khác"];
+const EXPLAIN_CATS = ["Trạm đêm đóng cửa (22h–6h)", "Thời tiết / thiên tai", "Hạ tầng điện / mạng", "Không tiếp cận được trạm", "Chờ vật tư", "Lỗi hệ thống VOMS", "Lỗi hệ thống CCTS", "Khách quan khác"];
 let explainMap = {};
 try { explainMap = JSON.parse(localStorage.getItem(LS_EXPLAIN) || "{}"); } catch (e) { explainMap = {}; }
 // bản cũ lưu string (chỉ có text) → đọc kiểu nào cũng ra {c: phân loại, t: chi tiết}
@@ -827,39 +827,45 @@ function renderDaily(f) {
   renderExplainDash(rows);
 }
 
-// --- Dashboard giải trình: 2 biểu đồ Chart.js tóm tắt các ca cần giải trình ---
-// (1) theo TÌNH HUỐNG (Resolve muộn / Pending for other / VOMS reject), tách đã/chưa giải trình
+// --- Dashboard giải trình: 2 biểu đồ tròn (doughnut) xem THÀNH PHẦN các ca cần giải trình ---
+// (1) theo TÌNH HUỐNG (Resolve muộn / Pending for other / VOMS reject) — đã/chưa giải trình để trong tooltip
 // (2) theo NGUYÊN NHÂN khách quan CSE đã phân loại (EXPLAIN_CATS)
+const PIE = ["#2e6da4", "#2e8b57", "#e67e22", "#c0392b", "#8e44ad", "#16a085", "#f39c12", "#2c3e50", "#d35400", "#27ae60"];
 function renderExplainDash(rows) {
   if (!$("c_exp_scn") || !$("c_exp_cat")) return; // chưa có canvas (vd bản live) → bỏ qua
   const scns = ["Resolve muộn", "Pending for other", "VOMS reject"];
-  const done = {}, undone = {};
-  for (const s of scns) { done[s] = 0; undone[s] = 0; }
+  const scnN = {}, done = {}, undone = {};
+  for (const s of scns) { scnN[s] = 0; done[s] = 0; undone[s] = 0; }
   const catCount = {}; for (const c of EXPLAIN_CATS) catCount[c] = 0; catCount["(chưa phân loại)"] = 0;
   for (const t of rows) {
     const s = explainScenario(t);
+    scnN[s]++;
     if (hasExp(t.id)) done[s]++; else undone[s]++;
     const c = expOf(t.id).c || "(chưa phân loại)";
     catCount[c] = (catCount[c] || 0) + 1;
   }
+  const N = rows.length || 1;
+  const pct = (v) => Math.round(1000 * v / N) / 10;
+  // (1) tình huống
+  const sL = scns.filter((s) => scnN[s] > 0);
   mkChart("c_exp_scn", {
-    type: "bar",
-    data: { labels: scns, datasets: [
-      { label: "Đã giải trình (miễn trừ)", data: scns.map((s) => done[s]), backgroundColor: COL.green + "cc" },
-      { label: "Chưa giải trình", data: scns.map((s) => undone[s]), backgroundColor: COL.red + "cc" },
-    ] },
+    type: "doughnut",
+    data: { labels: sL, datasets: [{ data: sL.map((s) => scnN[s]), backgroundColor: sL.map((s) => EXP_SCN[s]), borderColor: "#fff", borderWidth: 1.5 }] },
     options: { responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { labels: { boxWidth: 10, font: { size: 11 } } }, title: { display: true, text: "Ca giải trình theo tình huống" } },
-      scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true, ticks: { precision: 0 } } } },
+      plugins: { legend: { position: "right", labels: { boxWidth: 12, font: { size: 11 } } },
+        title: { display: true, text: "Thành phần theo tình huống (" + rows.length + " ca)" },
+        tooltip: { callbacks: { label: (ctx) => `${ctx.label}: ${scnN[ctx.label]} (${pct(scnN[ctx.label])}%) — đã GT ${done[ctx.label]}, chưa ${undone[ctx.label]}` } } } },
   });
-  const cats = Object.keys(catCount).filter((c) => catCount[c] > 0);
+  // (2) nguyên nhân khách quan
+  const cats = Object.keys(catCount).filter((c) => catCount[c] > 0).sort((a, b) => catCount[b] - catCount[a]);
   mkChart("c_exp_cat", {
-    type: "bar",
-    data: { labels: cats, datasets: [{ label: "Số ca", data: cats.map((c) => catCount[c]),
-      backgroundColor: cats.map((c) => (c === "(chưa phân loại)" ? COL.gray + "aa" : COL.blue + "cc")) }] },
-    options: { indexAxis: "y", responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { display: false }, title: { display: true, text: "Nguyên nhân khách quan (CSE phân loại)" } },
-      scales: { x: { beginAtZero: true, ticks: { precision: 0 } } } },
+    type: "doughnut",
+    data: { labels: cats, datasets: [{ data: cats.map((c) => catCount[c]),
+      backgroundColor: cats.map((c, i) => (c === "(chưa phân loại)" ? COL.gray + "aa" : PIE[i % PIE.length])), borderColor: "#fff", borderWidth: 1.5 }] },
+    options: { responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { position: "right", labels: { boxWidth: 12, font: { size: 10 } } },
+        title: { display: true, text: "Thành phần nguyên nhân khách quan" },
+        tooltip: { callbacks: { label: (ctx) => `${ctx.label}: ${catCount[ctx.label]} (${pct(catCount[ctx.label])}%)` } } } },
   });
 }
 function flashSaved(n) {
