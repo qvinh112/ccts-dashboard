@@ -752,6 +752,14 @@ const inExpSel = (t) => (expSel === "fast" ? t.limitH < 48 : expSel === "48" ? t
 // ngưỡng = t.limitH (nhóm 3h → >3h, nhóm 4h → >4h) — KHÔNG so cứng 3h như trước
 const isOverVoms = (t) => (t.slaClass === "3h" || t.slaClass === "4h") && t.openToVomsH != null && t.openToVomsH > t.limitH;
 const needExplain = (t) => t.zone === "overdue" || t.rejected || isOverVoms(t);
+// phân loại TÌNH HUỐNG của ca giải trình — 1 nhãn chính, ưu tiên: reject > treo bên thứ 3 > resolve muộn
+const EXP_SCN = { "Resolve muộn": COL.red, "Pending for other": COL.amber, "VOMS reject": "#8e44ad" };
+const EXT_HOLDERS = new Set(["Tại ASP", "Tại VOMS", "Kẹt vật tư", "Kẹt firmware"]); // holderOf → đang treo bên ngoài team
+function explainScenario(t) {
+  if (t.rejected) return "VOMS reject";                                 // bị VOMS trả về Open / Close rejected
+  if (!t.refSol && EXT_HOLDERS.has(holderOf(t))) return "Pending for other"; // chưa có solution & đang treo bên thứ 3
+  return "Resolve muộn";                                                // đã có/đang chờ solution nhưng vượt hạn
+}
 function dailyRows(f) {
   const day = $("d_day").value;
   if (!day) return { day: "", day2: "", rows: [], created: 0, byDay: {} };
@@ -776,7 +784,7 @@ function renderDaily(f) {
   dailySummary(rows, created, byDay, multi);
   const order = { "3h": 0, "4h": 1, "7h": 2, "12h": 3, "48h": 4 };
   rows.sort((a, b) => (multi ? dayKey(a.createT).localeCompare(dayKey(b.createT)) : 0) || (order[a.slaClass] ?? 9) - (order[b.slaClass] ?? 9) || b.createT - a.createT);
-  $("daily").innerHTML = "<thead><tr><th>Ticket</th><th>Ticket ID</th><th>External ticket id</th><th>Trạm</th><th>Mã lỗi</th><th>Nhóm</th><th>Tạo lúc</th><th>Solution đầu</th><th>Giờ xử lý / hạn</th><th title=\"Thời gian từ trạng thái Open đến Pending for VOMS confirm, lấy trong Events Record — chỉ áp nhóm 3h/4h\">Open→VOMS</th><th>Kết quả</th><th>Người</th><th>Khu</th><th>Trạng thái</th><th style=\"min-width:160px\">Cần giải trình vì</th><th style=\"min-width:200px\">Giải trình khách quan (CSE gõ)</th></tr></thead><tbody>" +
+  $("daily").innerHTML = "<thead><tr><th>Ticket</th><th>Ticket ID</th><th>External ticket id</th><th>Trạm</th><th>Mã lỗi</th><th>Nhóm</th><th>Tạo lúc</th><th>Solution đầu</th><th>Giờ xử lý / hạn</th><th title=\"Thời gian từ trạng thái Open đến Pending for VOMS confirm, lấy trong Events Record — chỉ áp nhóm 3h/4h\">Open→VOMS</th><th>Kết quả</th><th>Người</th><th>Khu</th><th>Trạng thái</th><th title=\"Phân loại tình huống: Resolve muộn / Pending for other (treo bên thứ 3) / VOMS reject\">Tình huống</th><th style=\"min-width:160px\">Cần giải trình vì</th><th style=\"min-width:200px\">Giải trình khách quan (CSE gõ)</th></tr></thead><tbody>" +
     rows.map((t) => {
       const dur = t.refSol ? Math.round((t.refSol.t - t.createT) / 360000) / 10 : null;
       const wait = t.refSol ? null : Math.round((Date.now() - t.createT) / 360000) / 10; // chưa xử lý: đã treo bao lâu tính đến giờ
@@ -787,12 +795,14 @@ function renderDaily(f) {
       const z = effZone(t);
       const kq = t.zone === "overdue" && z !== "ontime" ? '<td class="bad">Quá hạn</td>' : isExempt(t) ? '<td class="warn" title="' + expText(t.id).replace(/"/g, "'") + '">Miễn trừ</td>' : t.zone === "pending" ? "<td>Chưa có sol</td>" : '<td style="color:var(--green)">Đạt</td>';
       const why = [t.zone === "overdue" ? "Quá hạn" : "", t.rejected ? "VOMS reject" : "", overVoms ? `Open→VOMS ${(Math.round(t.openToVomsH * 10) / 10).toLocaleString("vi")}h>${t.limitH}h` : ""].filter(Boolean).join(" · ");
+      const scn = explainScenario(t), scnC = EXP_SCN[scn];
+      const scnCell = `<td><span class="pill" style="background:${scnC}22;color:${scnC};border:1px solid ${scnC}66;white-space:nowrap" title="Đang treo: ${holderOf(t)}">${scn}</span></td>`;
       return `<tr${t.limitH <= 4 ? ' style="background:rgba(220,53,69,.05)"' : ""}><td title="${tip}">${t.name || t.id}</td><td>${t.id}</td><td>${t.extId || "—"}</td><td>${t.station}</td><td>${t.err}</td><td><span class="pill ${t.limitH <= 3 ? "p3" : t.limitH <= 4 ? "p4" : t.limitH <= 12 ? "p7" : "p48"}">${t.slaClass}</span></td>` +
         `<td>${(multi ? dayKey(t.createT).slice(5) + " " : "") + pad(h)}:${pad(t.createT.getMinutes())}${night}</td>` +
         `<td>${t.refSol ? dayKey(t.refSol.t).slice(5) + " " + pad(t.refSol.t.getHours()) + ":" + pad(t.refSol.t.getMinutes()) : '<b style="color:var(--red)">CHƯA XỬ LÝ</b>'}</td>` +
         `<td class="${t.zone === "overdue" ? "bad" : ""}">${dur != null ? dur.toLocaleString("vi") + "h / " + t.limitH + "h" : '<span title="Đã treo tính đến bây giờ">đang ' + wait.toLocaleString("vi") + "h</span> / " + t.limitH + "h"}</td>` +
         `<td class="${overVoms ? "warn" : ""}">${t.openToVomsH != null && t.limitH <= 4 ? (Math.round(t.openToVomsH * 10) / 10).toLocaleString("vi") + "h" : "—"}</td>` + kq +
-        `<td>${t.proc || "—"}</td><td>${t.proc ? grpOf(t.proc) : ""}</td><td>${t.status}</td>` +
+        `<td>${t.proc || "—"}</td><td>${t.proc ? grpOf(t.proc) : ""}</td><td>${t.status}</td>` + scnCell +
         `<td style="text-align:left;font-size:12px;color:var(--red)">${why}${t.repeat30 ? ' · <b>TP' + (t.repeat7 ? "≤7ng" : "≤30ng") + "</b>" : ""}</td>` +
         `<td style="text-align:left"><div style="display:flex;flex-direction:column;gap:3px;min-width:210px">` +
         `<select class="exp-cat" data-tid="${t.id}" style="padding:3px 4px;border:1px solid var(--border);border-radius:5px;font-size:12px;color:${expOf(t.id).c ? "var(--text)" : "var(--muted)"}"><option value="">— phân loại khách quan —</option>` +
@@ -807,12 +817,50 @@ function renderDaily(f) {
     if (cat) cat.style.color = cat.value ? "var(--text)" : "var(--muted)";
     const d = dailyRows(currentFilter());
     dailySummary(d.rows, d.created, d.byDay, d.day2 && d.day2 !== d.day);
+    renderExplainDash(d.rows);
     renderStats();
     flashSaved(1);
   };
   $("daily").querySelectorAll(".exp-input, .exp-cat").forEach((el) =>
     el.addEventListener("change", () => saveRow(el.dataset.tid))
   );
+  renderExplainDash(rows);
+}
+
+// --- Dashboard giải trình: 2 biểu đồ Chart.js tóm tắt các ca cần giải trình ---
+// (1) theo TÌNH HUỐNG (Resolve muộn / Pending for other / VOMS reject), tách đã/chưa giải trình
+// (2) theo NGUYÊN NHÂN khách quan CSE đã phân loại (EXPLAIN_CATS)
+function renderExplainDash(rows) {
+  if (!$("c_exp_scn") || !$("c_exp_cat")) return; // chưa có canvas (vd bản live) → bỏ qua
+  const scns = ["Resolve muộn", "Pending for other", "VOMS reject"];
+  const done = {}, undone = {};
+  for (const s of scns) { done[s] = 0; undone[s] = 0; }
+  const catCount = {}; for (const c of EXPLAIN_CATS) catCount[c] = 0; catCount["(chưa phân loại)"] = 0;
+  for (const t of rows) {
+    const s = explainScenario(t);
+    if (hasExp(t.id)) done[s]++; else undone[s]++;
+    const c = expOf(t.id).c || "(chưa phân loại)";
+    catCount[c] = (catCount[c] || 0) + 1;
+  }
+  mkChart("c_exp_scn", {
+    type: "bar",
+    data: { labels: scns, datasets: [
+      { label: "Đã giải trình (miễn trừ)", data: scns.map((s) => done[s]), backgroundColor: COL.green + "cc" },
+      { label: "Chưa giải trình", data: scns.map((s) => undone[s]), backgroundColor: COL.red + "cc" },
+    ] },
+    options: { responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { labels: { boxWidth: 10, font: { size: 11 } } }, title: { display: true, text: "Ca giải trình theo tình huống" } },
+      scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true, ticks: { precision: 0 } } } },
+  });
+  const cats = Object.keys(catCount).filter((c) => catCount[c] > 0);
+  mkChart("c_exp_cat", {
+    type: "bar",
+    data: { labels: cats, datasets: [{ label: "Số ca", data: cats.map((c) => catCount[c]),
+      backgroundColor: cats.map((c) => (c === "(chưa phân loại)" ? COL.gray + "aa" : COL.blue + "cc")) }] },
+    options: { indexAxis: "y", responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false }, title: { display: true, text: "Nguyên nhân khách quan (CSE phân loại)" } },
+      scales: { x: { beginAtZero: true, ticks: { precision: 0 } } } },
+  });
 }
 function flashSaved(n) {
   $("d_saved").textContent = `✓ đã lưu ${n} giải trình lúc ${new Date().toLocaleTimeString("vi")} — đã trừ khỏi %QH`;
