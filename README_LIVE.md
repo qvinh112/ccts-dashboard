@@ -68,4 +68,10 @@ libs/station_map.js        ← file RIÊNG bắt buộc phải có
 - `/dashboard/full` và `/dashboard/current` là node RIÊNG, không đụng `/tickets` của Field Map.
 - `push_export.py` cảnh báo nếu payload > 8MB — nên dùng export theo tháng của HNO, đừng
   dùng báo cáo master vài chục nghìn ticket.
-- Đồng bộ giải trình (nút ☁) và AI QC vẫn hoạt động bình thường.
+- **Giải trình đồng bộ TỰ ĐỘNG qua Firebase** (node `/dashboard/explain`, từ 16/07/2026):
+  gõ giải trình trên máy nào thì mọi máy đang mở web thấy ngay, không phải cấu hình gì.
+  Kênh Apps Script/Google Sheet cũ (nút ☁ Đồng bộ + ☁ Ghi đè sheet online) đã BỎ —
+  file `apps_script_giai_trinh.gs` chỉ còn để tham khảo, sheet GiaiTrinh không được ghi
+  tiếp nữa (cần bảng giải trình dạng file thì dùng nút ⬇ xuất Excel của card Giải trình).
+  Dữ liệu sheet cũ đã di trú sang Firebase (242 giải trình, 16/07).
+- AI QC vẫn kéo live Google Sheet như cũ.
