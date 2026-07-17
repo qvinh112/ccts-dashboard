@@ -28,7 +28,8 @@ let dataMax = null;           // ngày mới nhất trong dữ liệu (mốc cho
 let hdrBase = "";             // phần đầu dòng thông tin header
 let partRecs = new Map();     // dedupe key -> dòng Spare Parts Record (đối soát kho good/broken)
 let rejectSet = new Set();    // Ticket ID từng bị Close rejected (quét từ Events Record)
-let vomsWin = new Map();      // Ticket ID -> {openT, vomsT}: mốc Open sớm nhất & Pending for VOMS confirm sớm nhất (Events Record)
+let vomsEv = new Map();       // Ticket ID -> [{t, st, proc, detail}] thô (Events Record) — gom đủ rồi mới dựng chu kỳ
+let vomsWin = new Map();      // Ticket ID -> {cycles[], round1H, totalH} do buildVomsCycles() dựng
 // VOMS reject THẬT = VOMS mở lại ticket kèm LÝ DO CHỌN SẴN của hệ thống (rule 17/07/2026).
 // Lọc theo Processor là KHÔNG đủ: chỉ VOMS mới mở lại được, nên KTV nhờ VOMS mở lại để add vật tư
 // cũng ghi Processor=VOMS -> phải phân biệt bằng nội dung lý do. Ghi chú GÕ TAY = mở lại thủ công,
@@ -37,6 +38,49 @@ let vomsWin = new Map();      // Ticket ID -> {openT, vomsT}: mốc Open sớm n
 // Dùng CHUNG cho cả 2 luồng nạp: ingestWorkbook (kéo-thả xlsx) và ingestFull (toàn cảnh từ Firebase).
 // Bổ sung vào regex nếu VOMS thêm lý do preset mới.
 const VOMS_REJECT_RX = /did not meet quality|không đạt chất lượng|không tuân thủ quy định/i;
+
+const r1 = (h) => (h == null ? "—" : (Math.round(h * 10) / 10).toLocaleString("vi")); // giờ, 1 chữ số thập phân
+
+// Bóc CHU KỲ Open→VOMS confirm (rule 17/07/2026). Mỗi lần VOMS thêm trạng thái Open = mở 1 VÒNG;
+// "Pending for VOMS confirm" kế tiếp đóng vòng đó. Ticket bị mở lại nhiều lần thì tổng thời gian
+// tích luỹ qua các vòng mới là thứ CCTS dùng để chấm overdue — vòng 1 đúng hạn vẫn có thể Overdue.
+//  · Open do NGƯỜI KHÁC (không phải VOMS) mở: BỎ HẲN khỏi chuỗi vòng (thao tác hành chính, vd nhờ
+//    mở để add vật tư) — không tính vào số vòng lẫn tổng thời gian.
+//  · Ghi chú "----" khi mở lại = mở lại KHÔNG nêu lý do (175/284 lần trong export 17/07) — vẫn là
+//    1 vòng thật vì có tốn thời gian, nhưng KHÔNG phải reject. Chỉ vòng có lý do preset mới là reject.
+// Trả về: cycles[] + round1H (vòng 1, giữ nguyên ý nghĩa openToVomsH cũ để không đổi cách chấm SLA
+// 3h/4h) + totalH (Open đầu → VOMS confirm cuối, dùng để hiển thị và giải thích overdue).
+function buildVomsCycles(list) {
+  // dedupe: dashboard gộp NHIỀU file export chồng lấn nhau -> cùng 1 event lặp lại nhiều lần,
+  // không lọc thì số vòng bị phồng và tổng sai (logic min cũ vốn miễn nhiễm, logic chu kỳ thì không).
+  const seen = new Set();
+  const evs = [];
+  for (const e of list) {
+    const k = +e.t + "|" + e.st + "|" + e.proc;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    evs.push(e);
+  }
+  evs.sort((a, b) => a.t - b.t);
+  const cycles = [];
+  let cur = null;
+  for (const e of evs) {
+    if (e.st === "open") {
+      if (e.proc !== "VOMS") continue;
+      cur = { openT: e.t, vomsT: null, reason: e.detail, isReject: VOMS_REJECT_RX.test(e.detail) };
+      cycles.push(cur);
+    } else if (e.st === "pending for voms confirm" && cur && !cur.vomsT) {
+      cur.vomsT = e.t;
+    }
+  }
+  const first = cycles[0];
+  const closed = cycles.filter((c) => c.vomsT);
+  return {
+    cycles,
+    round1H: first && first.vomsT ? (first.vomsT - first.openT) / HOURS : null,
+    totalH: first && closed.length ? (closed[closed.length - 1].vomsT - first.openT) / HOURS : null,
+  };
+}
 let errFilter = "";           // lọc theo mã lỗi (bấm cột trong biểu đồ Pareto) — hiện chip ở thanh #af_bar
 let tvTimer = null;           // bộ đếm tự xoay tab ở chế độ TV
 
@@ -249,15 +293,14 @@ function ingestWorkbook(buf, fname) {
     const proc = String(r["Processor"] || "").trim().toUpperCase();
     const detail = String(r["Record Detail"] || "").trim();
     if (/close rejected/i.test(st) || (proc === "VOMS" && st === "open" && VOMS_REJECT_RX.test(detail))) rejectSet.add(tid);
-    // mốc cửa sổ Open → Pending for VOMS confirm (lấy sự kiện SỚM NHẤT mỗi loại)
+    // gom event Open / Pending for VOMS confirm — dựng chu kỳ sau (Events Record KHÔNG sắp sẵn theo thời gian)
     const ct = toDate(r["Create Time"]);
     if (tid && ct && (st === "open" || st === "pending for voms confirm")) {
-      const w = vomsWin.get(tid) || {};
-      const k = st === "open" ? "openT" : "vomsT";
-      if (!w[k] || ct < w[k]) w[k] = ct;
-      vomsWin.set(tid, w);
+      if (!vomsEv.has(tid)) vomsEv.set(tid, []);
+      vomsEv.get(tid).push({ t: ct, st, proc, detail });
     }
   }
+  for (const [tid, list] of vomsEv) vomsWin.set(tid, buildVomsCycles(list));
   const partsSet = new Set(parts.map((r) => String(r["Ticket ID"])));
   for (const r of parts) {
     const tid = String(r["Ticket ID"] || "").trim();
@@ -454,9 +497,11 @@ function deriveAll() {
     else if (zone === "V2") { t.limitH = t.hasParts ? 7 : 4; t.slaClass = t.limitH + "h"; }
     else { t.slaClass = "48h"; t.limitH = 48; }
 
-    // thời gian Open → Pending for VOMS confirm (giờ) lấy trực tiếp từ Events Record — cần TRƯỚC khi tính zone
+    // chu kỳ Open → Pending for VOMS confirm từ Events Record — cần TRƯỚC khi tính zone
     const w = vomsWin.get(t.id);
-    t.openToVomsH = (w && w.openT && w.vomsT && w.vomsT >= w.openT) ? (w.vomsT - w.openT) / HOURS : null;
+    t.vomsCycles = w ? w.cycles : [];
+    t.openToVomsH = w ? w.round1H : null;  // VÒNG 1 — giữ nguyên ý nghĩa cũ, cách chấm SLA 3h/4h không đổi
+    t.vomsTotalH = w ? w.totalH : null;    // TỔNG Open đầu → VOMS confirm cuối — dùng để hiển thị/giải thích overdue
 
     // ontime/overdue (rule 16/07/2026 v2): vòng đời Open → KTV xử lý → nhấn Resolve.
     // Nhóm 3h/4h chỉ QUÁ HẠN khi CẢ HAI mốc đều vượt SLA: giờ xử lý (Tạo→Solution đầu) VÀ
@@ -786,6 +831,20 @@ function explainScenario(t) {
   if (t.rejected) return "VOMS reject";                                 // bị VOMS trả về Open / Close rejected
   return "Resolve muộn";                                                // dự phòng (needExplain đảm bảo đã dính ≥1)
 }
+// tooltip cột Open→VOMS: liệt kê từng vòng (mốc, thời lượng, lý do mở lại) + tổng so với hạn
+function cycTip(t) {
+  const cyc = t.vomsCycles || [];
+  if (!cyc.length) return "";
+  const dt = (d) => dayKey(d).slice(5) + " " + pad(d.getHours()) + ":" + pad(d.getMinutes());
+  const lines = cyc.map((c, k) => {
+    const dur = c.vomsT ? ` = ${r1((c.vomsT - c.openT) / HOURS)}h` : " = chưa confirm";
+    const why = c.isReject ? ` [reject: ${c.reason}]`
+      : (c.reason && c.reason !== "----" ? ` [${c.reason}]` : (k ? " [mở lại không ghi lý do]" : ""));
+    return `V${k + 1}: ${dt(c.openT)} → ${c.vomsT ? dt(c.vomsT) : "—"}${dur}${why}`;
+  });
+  if (t.vomsTotalH != null) lines.push(`Tổng: ${r1(t.vomsTotalH)}h / ${t.limitH}h`);
+  return ` title="${lines.join("\n").replace(/"/g, "'")}"`;
+}
 function dailyRows(f) {
   const day = $("d_day").value;
   if (!day) return { day: "", day2: "", rows: [], created: 0, byDay: {} };
@@ -810,7 +869,7 @@ function renderDaily(f) {
   dailySummary(rows, created, byDay, multi);
   const order = { "3h": 0, "4h": 1, "7h": 2, "12h": 3, "48h": 4 };
   rows.sort((a, b) => (multi ? dayKey(a.createT).localeCompare(dayKey(b.createT)) : 0) || (order[a.slaClass] ?? 9) - (order[b.slaClass] ?? 9) || b.createT - a.createT);
-  $("daily").innerHTML = "<thead><tr><th>Ticket</th><th>Ticket ID</th><th>External ticket id</th><th>Trạm</th><th>Mã lỗi</th><th>Nhóm</th><th>Tạo lúc</th><th>Solution đầu</th><th>Giờ xử lý / hạn</th><th title=\"Thời gian từ trạng thái Open đến Pending for VOMS confirm, lấy trong Events Record (Open sớm nhất → Pending for VOMS confirm sớm nhất); '—' nếu thiếu 1 trong 2 mốc\">Open→VOMS</th><th>Kết quả</th><th>Người</th><th>Khu</th><th>Trạng thái</th><th title=\"Phân loại tình huống: Xử lý muộn (giờ xử lý vượt hạn) / Resolve muộn (Open→VOMS trễ) / Lỗi hệ thống (treo bên thứ 3) / VOMS reject\">Tình huống</th><th style=\"min-width:160px\">Cần giải trình vì</th><th style=\"min-width:200px\">Giải trình khách quan (CSE gõ)</th></tr></thead><tbody>" +
+  $("daily").innerHTML = "<thead><tr><th>Ticket</th><th>Ticket ID</th><th>External ticket id</th><th>Trạm</th><th>Mã lỗi</th><th>Nhóm</th><th>Tạo lúc</th><th>Solution đầu</th><th>Giờ xử lý / hạn</th><th title=\"TỔNG thời gian Open đầu tiên → Pending for VOMS confirm cuối cùng (Events Record). Badge ⟳n = ticket bị mở lại n vòng; tổng tích luỹ qua các vòng mới là con số CCTS dùng chấm overdue, nên vòng 1 đúng hạn vẫn có thể Quá hạn. Hover để xem từng vòng. Vòng do người khác (không phải VOMS) mở không được tính.\">Open→VOMS</th><th>Kết quả</th><th>Người</th><th>Khu</th><th>Trạng thái</th><th title=\"Phân loại tình huống: Xử lý muộn (giờ xử lý vượt hạn) / Resolve muộn (Open→VOMS trễ) / Lỗi hệ thống (treo bên thứ 3) / VOMS reject\">Tình huống</th><th style=\"min-width:160px\">Cần giải trình vì</th><th style=\"min-width:200px\">Giải trình khách quan (CSE gõ)</th></tr></thead><tbody>" +
     rows.map((t) => {
       const dur = t.refSol ? Math.round((t.refSol.t - t.createT) / 360000) / 10 : null;
       const wait = t.refSol ? null : Math.round((Date.now() - t.createT) / 360000) / 10; // chưa xử lý: đã treo bao lâu tính đến giờ
@@ -820,14 +879,22 @@ function renderDaily(f) {
       const overVoms = isOverVoms(t);
       const z = effZone(t);
       const kq = t.zone === "overdue" && z !== "ontime" ? '<td class="bad">Quá hạn</td>' : isExempt(t) ? '<td class="warn" title="' + expText(t.id).replace(/"/g, "'") + '">Miễn trừ</td>' : t.zone === "pending" ? "<td>Chưa có sol</td>" : '<td style="color:var(--green)">Đạt</td>';
-      const why = [t.zone === "overdue" ? "Quá hạn" : "", t.rejected ? "VOMS reject" : "", overVoms ? `Open→VOMS ${(Math.round(t.openToVomsH * 10) / 10).toLocaleString("vi")}h>${t.limitH}h` : ""].filter(Boolean).join(" · ");
+      // chu kỳ Open→VOMS: cột hiện TỔNG (số CCTS dùng chấm overdue) + badge ⟳ số vòng; hover ra từng vòng
+      const cyc = t.vomsCycles || [], nCyc = cyc.length, nRej = cyc.filter((c) => c.isReject).length;
+      const totH = t.vomsTotalH;
+      const vomsOver = totH != null && totH > t.limitH;
+      const cycTxt = nCyc > 1 ? `${nCyc} vòng mở lại${nRej ? ` (${nRej} reject)` : ""}` : "";
+      const why = [t.zone === "overdue" ? "Quá hạn" : "", t.rejected ? "VOMS reject" : "",
+        overVoms ? `Open→VOMS ${r1(t.openToVomsH)}h>${t.limitH}h` : "",
+        cycTxt, nCyc > 1 && vomsOver ? `tổng ${r1(totH)}h>${t.limitH}h` : ""].filter(Boolean).join(" · ");
       const scn = explainScenario(t), scnC = EXP_SCN[scn];
       const scnCell = `<td><span class="pill" style="background:${scnC}22;color:${scnC};border:1px solid ${scnC}66;white-space:nowrap" title="Đang treo: ${holderOf(t)}">${scn}</span></td>`;
       return `<tr${t.limitH <= 4 ? ' style="background:rgba(220,53,69,.05)"' : ""}><td title="${tip}">${t.name || t.id}</td><td>${t.id}</td><td>${t.extId || "—"}</td><td>${t.station}</td><td>${t.err}</td><td><span class="pill ${t.limitH <= 3 ? "p3" : t.limitH <= 4 ? "p4" : t.limitH <= 12 ? "p7" : "p48"}">${t.slaClass}</span></td>` +
         `<td>${(multi ? dayKey(t.createT).slice(5) + " " : "") + pad(h)}:${pad(t.createT.getMinutes())}${night}</td>` +
         `<td>${t.refSol ? dayKey(t.refSol.t).slice(5) + " " + pad(t.refSol.t.getHours()) + ":" + pad(t.refSol.t.getMinutes()) : '<b style="color:var(--red)">CHƯA XỬ LÝ</b>'}</td>` +
         `<td class="${t.zone === "overdue" ? "bad" : ""}">${dur != null ? dur.toLocaleString("vi") + "h / " + t.limitH + "h" : '<span title="Đã treo tính đến bây giờ">đang ' + wait.toLocaleString("vi") + "h</span> / " + t.limitH + "h"}</td>` +
-        `<td class="${overVoms ? "warn" : ""}">${t.openToVomsH != null ? (Math.round(t.openToVomsH * 10) / 10).toLocaleString("vi") + "h" : "—"}</td>` + kq +
+        `<td class="${vomsOver ? "warn" : ""}"${cycTip(t)}>${totH != null ? r1(totH) + "h" : "—"}${
+          nCyc > 1 ? ` <span class="pill" style="background:var(--amber)22;color:var(--amber);border:1px solid var(--amber)66">⟳${nCyc}</span>` : ""}</td>` + kq +
         `<td>${t.proc || "—"}</td><td>${t.proc ? grpOf(t.proc) : ""}</td><td>${t.status}</td>` + scnCell +
         `<td style="text-align:left;font-size:12px;color:var(--red)">${why}${t.repeat30 ? ' · <b>TP' + (t.repeat7 ? "≤7ng" : "≤30ng") + "</b>" : ""}</td>` +
         `<td style="text-align:left"><div style="display:flex;flex-direction:column;gap:3px;min-width:210px">` +
@@ -2152,7 +2219,7 @@ function refreshWeb() {
 // live-lite: nạp {meta, rows} ticket đang mở vào tickets Map (KHÔNG afterLoad — refreshWeb lo)
 function ingestLive(payload) {
   tickets = new Map(); solutions = new Map(); partRecs = new Map();
-  rejectSet = new Set(); vomsWin = new Map();
+  rejectSet = new Set(); vomsWin = new Map(); vomsEv = new Map();
   for (const r of (payload.rows || [])) {
     if (!r || r.id == null) continue;
     tickets.set(String(r.id), {
@@ -2175,7 +2242,7 @@ function ingestLive(payload) {
 // mảng JSON push_export.py đẩy lên (ngày = epoch ms) thay vì đọc sheet xlsx.
 function ingestFull(payload) {
   tickets = new Map(); solutions = new Map(); partRecs = new Map();
-  rejectSet = new Set(); vomsWin = new Map();
+  rejectSet = new Set(); vomsWin = new Map(); vomsEv = new Map();
   const D = (ms) => (ms ? new Date(ms) : null);
 
   for (const r of (payload.events || [])) {
@@ -2186,12 +2253,11 @@ function ingestFull(payload) {
     if (/close rejected/i.test(st) || (proc === "VOMS" && st === "open" && VOMS_REJECT_RX.test(detail))) rejectSet.add(tid);
     const ct = D(r.createMs);
     if (tid && ct && (st === "open" || st === "pending for voms confirm")) {
-      const w = vomsWin.get(tid) || {};
-      const k = st === "open" ? "openT" : "vomsT";
-      if (!w[k] || ct < w[k]) w[k] = ct;
-      vomsWin.set(tid, w);
+      if (!vomsEv.has(tid)) vomsEv.set(tid, []);
+      vomsEv.get(tid).push({ t: ct, st, proc, detail });
     }
   }
+  for (const [tid, list] of vomsEv) vomsWin.set(tid, buildVomsCycles(list));
   const partsSet = new Set((payload.parts || []).map((r) => String(r.tid)));
   for (const r of (payload.parts || [])) {
     const tid = String(r.tid || "").trim(); if (!tid) continue;
@@ -2266,7 +2332,7 @@ function deriveLive() {
     // ticket mở: quá hạn khi đã qua hạn theo đồng hồ hiện tại (chính xác hơn giá trị đẩy lúc quét)
     t.zone = (t._deadline && Date.now() > +t._deadline) ? "overdue" : (t._zone || "pending");
     t.repeat7 = t._rep7; t.repeat30 = t._rep30; t.repeatOf = null; t.caused30 = false;
-    t.openToVomsH = null; t.rejected = false; t.ftf = false;
+    t.openToVomsH = null; t.vomsCycles = []; t.vomsTotalH = null; t.rejected = false; t.ftf = false;
   }
   buildRiskModel();
 }
