@@ -29,6 +29,14 @@ let hdrBase = "";             // phần đầu dòng thông tin header
 let partRecs = new Map();     // dedupe key -> dòng Spare Parts Record (đối soát kho good/broken)
 let rejectSet = new Set();    // Ticket ID từng bị Close rejected (quét từ Events Record)
 let vomsWin = new Map();      // Ticket ID -> {openT, vomsT}: mốc Open sớm nhất & Pending for VOMS confirm sớm nhất (Events Record)
+// VOMS reject THẬT = VOMS mở lại ticket kèm LÝ DO CHỌN SẴN của hệ thống (rule 17/07/2026).
+// Lọc theo Processor là KHÔNG đủ: chỉ VOMS mới mở lại được, nên KTV nhờ VOMS mở lại để add vật tư
+// cũng ghi Processor=VOMS -> phải phân biệt bằng nội dung lý do. Ghi chú GÕ TAY = mở lại thủ công,
+// KHÔNG tính reject (vd ticket 1125744621504430080: "C.HNO2017 Lỗi trụ báo xanh ko nhận sạc",
+// mở lại xong chỉ add vật tư đúng bằng thứ đã thay trước đó, không có solution mới).
+// Dùng CHUNG cho cả 2 luồng nạp: ingestWorkbook (kéo-thả xlsx) và ingestFull (toàn cảnh từ Firebase).
+// Bổ sung vào regex nếu VOMS thêm lý do preset mới.
+const VOMS_REJECT_RX = /did not meet quality|không đạt chất lượng|không tuân thủ quy định/i;
 let errFilter = "";           // lọc theo mã lỗi (bấm cột trong biểu đồ Pareto) — hiện chip ở thanh #af_bar
 let tvTimer = null;           // bộ đếm tự xoay tab ở chế độ TV
 
@@ -233,13 +241,8 @@ function ingestWorkbook(buf, fname) {
   const parts = sheetRows(wb, "Spare Parts Record");
   // Reject = VOMS "add event record" trả ticket về trạng thái Open (thay vì đẩy sang Pending for local team close).
   // Nhận diện: Processor = VOMS, Ticket Status = Open, VÀ Record Detail là LÝ DO CHỌN SẴN của hệ thống.
-  // rule 17/07/2026: chỉ lý do preset mới là reject thật. Ghi chú GÕ TAY (vd "C.HNO2017 Lỗi trụ báo xanh
-  // ko nhận sạc") là ca KTV nhờ VOMS mở lại để add vật tư/báo lại lỗi — chỉ VOMS mới mở lại được nên lọc
-  // theo Processor KHÔNG loại được, phải lọc theo nội dung lý do. Dòng Open ghi chú rỗng/"----" = mở ticket
-  // ban đầu, cũng không tính. Vẫn giữ Close rejected nếu file có.
-  // Preset thấy trong export: "Incident resolution did not meet quality" / "Xử lý sự cố không đạt chất lượng"
-  // / "Xử lý sự cố nhưng không tuân thủ quy định" — bổ sung vào regex nếu VOMS thêm lý do preset mới.
-  const VOMS_REJECT_RX = /did not meet quality|không đạt chất lượng|không tuân thủ quy định/i;
+  // Lý do preset -> reject thật (xem VOMS_REJECT_RX ở đầu file). Dòng Open ghi chú rỗng/"----" = mở ticket
+  // ban đầu, không tính. Vẫn giữ Close rejected nếu file có.
   for (const r of sheetRows(wb, "Events Record")) {
     const tid = String(r["Ticket ID"] || "").trim();
     const st = String(r["Ticket Status"] || "").trim().toLowerCase();
@@ -2180,8 +2183,7 @@ function ingestFull(payload) {
     const st = String(r.status || "").trim().toLowerCase();
     const proc = String(r.proc || "").trim().toUpperCase();
     const detail = String(r.detail || "").trim();
-    const hasDetail = !!detail && detail !== "----";
-    if (/close rejected/i.test(st) || (proc === "VOMS" && st === "open" && hasDetail)) rejectSet.add(tid);
+    if (/close rejected/i.test(st) || (proc === "VOMS" && st === "open" && VOMS_REJECT_RX.test(detail))) rejectSet.add(tid);
     const ct = D(r.createMs);
     if (tid && ct && (st === "open" || st === "pending for voms confirm")) {
       const w = vomsWin.get(tid) || {};
