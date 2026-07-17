@@ -232,15 +232,20 @@ function ingestWorkbook(buf, fname) {
   const sols = sheetRows(wb, "Solutions");
   const parts = sheetRows(wb, "Spare Parts Record");
   // Reject = VOMS "add event record" trả ticket về trạng thái Open (thay vì đẩy sang Pending for local team close).
-  // Nhận diện trên Events Record: Processor = VOMS, Ticket Status = Open, và có ghi chú (Record Detail khác rỗng)
-  // — dòng Open ghi chú rỗng là sự kiện mở ticket ban đầu, KHÔNG tính. Vẫn giữ Close rejected nếu file có.
+  // Nhận diện: Processor = VOMS, Ticket Status = Open, VÀ Record Detail là LÝ DO CHỌN SẴN của hệ thống.
+  // rule 17/07/2026: chỉ lý do preset mới là reject thật. Ghi chú GÕ TAY (vd "C.HNO2017 Lỗi trụ báo xanh
+  // ko nhận sạc") là ca KTV nhờ VOMS mở lại để add vật tư/báo lại lỗi — chỉ VOMS mới mở lại được nên lọc
+  // theo Processor KHÔNG loại được, phải lọc theo nội dung lý do. Dòng Open ghi chú rỗng/"----" = mở ticket
+  // ban đầu, cũng không tính. Vẫn giữ Close rejected nếu file có.
+  // Preset thấy trong export: "Incident resolution did not meet quality" / "Xử lý sự cố không đạt chất lượng"
+  // / "Xử lý sự cố nhưng không tuân thủ quy định" — bổ sung vào regex nếu VOMS thêm lý do preset mới.
+  const VOMS_REJECT_RX = /did not meet quality|không đạt chất lượng|không tuân thủ quy định/i;
   for (const r of sheetRows(wb, "Events Record")) {
     const tid = String(r["Ticket ID"] || "").trim();
     const st = String(r["Ticket Status"] || "").trim().toLowerCase();
     const proc = String(r["Processor"] || "").trim().toUpperCase();
     const detail = String(r["Record Detail"] || "").trim();
-    const hasDetail = !!detail && detail !== "----";
-    if (/close rejected/i.test(st) || (proc === "VOMS" && st === "open" && hasDetail)) rejectSet.add(tid);
+    if (/close rejected/i.test(st) || (proc === "VOMS" && st === "open" && VOMS_REJECT_RX.test(detail))) rejectSet.add(tid);
     // mốc cửa sổ Open → Pending for VOMS confirm (lấy sự kiện SỚM NHẤT mỗi loại)
     const ct = toDate(r["Create Time"]);
     if (tid && ct && (st === "open" || st === "pending for voms confirm")) {
