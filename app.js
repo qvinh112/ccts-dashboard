@@ -1,7 +1,7 @@
 /* Dashboard điều hành CCTS — xử lý hoàn toàn client-side, 0 token.
  * Nguồn: export CCTS chuẩn (Ticket Information / Solutions / Spare Parts Record).
  * Logic đã chốt với user:
- *  - SLA vùng: trạm 3h→3h, 4h→4h (có thay linh kiện→7h), còn lại→48h (dùng SLA Status CCTS)
+ *  - SLA nâng cao = trạm HN + Tự doanh: V1→3h, V2→4h (có thay linh kiện→7h); còn lại→48h (dùng SLA Status CCTS)
  *  - Ontime vùng = solution đầu tiên (ưu tiên Permanent) − Create Time ≤ hạn
  *  - Người xử lý = Processor của solution; tái phát = cùng Charge Point ID + mã lỗi ≤7/30 ngày sau Permanent
  */
@@ -435,15 +435,15 @@ function deriveAll() {
     t.proc = first ? first.proc : null;
     t.hasAtt = t.sols.some((s) => s.hasAtt); // có ảnh đính kèm trong solution (yêu cầu kho: thay vật tư phải chụp ảnh)
 
-    // nhóm SLA (rule 02/07/2026: phạm vi = trạm HN + Tự doanh trong STATION_MAP)
-    // V1=3h; V2=4h (thay linh kiện 7h); V3=7h (thay linh kiện 12h); ngoài phạm vi=48h
+    // nhóm SLA nâng cao (rule 17/07/2026: phạm vi = trạm HN + Tự doanh trong STATION_MAP)
+    // V1=3h; V2=4h (thay linh kiện 7h). V3 KHÔNG thuộc SLA nâng cao → 48h (HN chỉ có V1/V2 nên
+    // nhánh V3 thực tế không xảy ra; giữ mặc định 48h để đúng rule nếu map đổi phạm vi).
     // rule 07/07/2026: SLA nhanh CHỈ áp cho ticket Ticket Source = API creation; nguồn khác → 48h dù trạm vùng nhanh
     const si = stationInfo(t.station);
     const zone = si && /api/i.test(t.source) ? si[0] : null;
     t.province = si ? si[1] : "";
     if (zone === "V1") { t.slaClass = "3h"; t.limitH = 3; }
     else if (zone === "V2") { t.limitH = t.hasParts ? 7 : 4; t.slaClass = t.limitH + "h"; }
-    else if (zone === "V3") { t.limitH = t.hasParts ? 12 : 7; t.slaClass = t.limitH + "h"; }
     else { t.slaClass = "48h"; t.limitH = 48; }
 
     // thời gian Open → Pending for VOMS confirm (giờ) lấy trực tiếp từ Events Record — cần TRƯỚC khi tính zone
