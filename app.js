@@ -802,7 +802,7 @@ function renderDaily(f) {
   dailySummary(rows, created, byDay, multi);
   const order = { "3h": 0, "4h": 1, "7h": 2, "12h": 3, "48h": 4 };
   rows.sort((a, b) => (multi ? dayKey(a.createT).localeCompare(dayKey(b.createT)) : 0) || (order[a.slaClass] ?? 9) - (order[b.slaClass] ?? 9) || b.createT - a.createT);
-  $("daily").innerHTML = "<thead><tr><th>Ticket</th><th>Ticket ID</th><th>External ticket id</th><th>Trạm</th><th>Mã lỗi</th><th>Nhóm</th><th>Tạo lúc</th><th>Solution đầu</th><th>Giờ xử lý / hạn</th><th title=\"Thời gian từ trạng thái Open đến Pending for VOMS confirm, lấy trong Events Record — chỉ áp nhóm 3h/4h\">Open→VOMS</th><th>Kết quả</th><th>Người</th><th>Khu</th><th>Trạng thái</th><th title=\"Phân loại tình huống: Xử lý muộn (giờ xử lý vượt hạn) / Resolve muộn (Open→VOMS trễ) / Lỗi hệ thống (treo bên thứ 3) / VOMS reject\">Tình huống</th><th style=\"min-width:160px\">Cần giải trình vì</th><th style=\"min-width:200px\">Giải trình khách quan (CSE gõ)</th></tr></thead><tbody>" +
+  $("daily").innerHTML = "<thead><tr><th>Ticket</th><th>Ticket ID</th><th>External ticket id</th><th>Trạm</th><th>Mã lỗi</th><th>Nhóm</th><th>Tạo lúc</th><th>Solution đầu</th><th>Giờ xử lý / hạn</th><th title=\"Thời gian từ trạng thái Open đến Pending for VOMS confirm, lấy trong Events Record (Open sớm nhất → Pending for VOMS confirm sớm nhất); '—' nếu thiếu 1 trong 2 mốc\">Open→VOMS</th><th>Kết quả</th><th>Người</th><th>Khu</th><th>Trạng thái</th><th title=\"Phân loại tình huống: Xử lý muộn (giờ xử lý vượt hạn) / Resolve muộn (Open→VOMS trễ) / Lỗi hệ thống (treo bên thứ 3) / VOMS reject\">Tình huống</th><th style=\"min-width:160px\">Cần giải trình vì</th><th style=\"min-width:200px\">Giải trình khách quan (CSE gõ)</th></tr></thead><tbody>" +
     rows.map((t) => {
       const dur = t.refSol ? Math.round((t.refSol.t - t.createT) / 360000) / 10 : null;
       const wait = t.refSol ? null : Math.round((Date.now() - t.createT) / 360000) / 10; // chưa xử lý: đã treo bao lâu tính đến giờ
@@ -819,7 +819,7 @@ function renderDaily(f) {
         `<td>${(multi ? dayKey(t.createT).slice(5) + " " : "") + pad(h)}:${pad(t.createT.getMinutes())}${night}</td>` +
         `<td>${t.refSol ? dayKey(t.refSol.t).slice(5) + " " + pad(t.refSol.t.getHours()) + ":" + pad(t.refSol.t.getMinutes()) : '<b style="color:var(--red)">CHƯA XỬ LÝ</b>'}</td>` +
         `<td class="${t.zone === "overdue" ? "bad" : ""}">${dur != null ? dur.toLocaleString("vi") + "h / " + t.limitH + "h" : '<span title="Đã treo tính đến bây giờ">đang ' + wait.toLocaleString("vi") + "h</span> / " + t.limitH + "h"}</td>` +
-        `<td class="${overVoms ? "warn" : ""}">${t.openToVomsH != null && t.limitH <= 4 ? (Math.round(t.openToVomsH * 10) / 10).toLocaleString("vi") + "h" : "—"}</td>` + kq +
+        `<td class="${overVoms ? "warn" : ""}">${t.openToVomsH != null ? (Math.round(t.openToVomsH * 10) / 10).toLocaleString("vi") + "h" : "—"}</td>` + kq +
         `<td>${t.proc || "—"}</td><td>${t.proc ? grpOf(t.proc) : ""}</td><td>${t.status}</td>` + scnCell +
         `<td style="text-align:left;font-size:12px;color:var(--red)">${why}${t.repeat30 ? ' · <b>TP' + (t.repeat7 ? "≤7ng" : "≤30ng") + "</b>" : ""}</td>` +
         `<td style="text-align:left"><div style="display:flex;flex-direction:column;gap:3px;min-width:210px">` +
@@ -1957,7 +1957,7 @@ $("btn_daily").addEventListener("click", () => {
     "Tạo lúc": dayKey(t.createT) + " " + pad(t.createT.getHours()) + ":" + pad(t.createT.getMinutes()),
     "Solution đầu": t.refSol ? dayKey(t.refSol.t) + " " + pad(t.refSol.t.getHours()) + ":" + pad(t.refSol.t.getMinutes()) : "CHƯA XỬ LÝ",
     "Giờ xử lý": t.refSol ? Math.round((t.refSol.t - t.createT) / 360000) / 10 : "",
-    "Open→VOMS confirm (h)": t.limitH <= 4 && t.openToVomsH != null ? Math.round(t.openToVomsH * 10) / 10 : "",
+    "Open→VOMS confirm (h)": t.openToVomsH != null ? Math.round(t.openToVomsH * 10) / 10 : "",
     "Hạn (h)": t.limitH, "Người": t.proc || "", "Khu": t.proc ? grpOf(t.proc) : "",
     "Trạng thái": t.status, "Tái phát": t.repeat30 ? (t.repeat7 ? "≤7 ngày" : "≤30 ngày") : "",
     "Cần giải trình vì": [t.zone === "overdue" ? "Quá hạn" : "", t.rejected ? "VOMS reject" : "", isOverVoms(t) ? "Open→VOMS>" + t.limitH + "h" : ""].filter(Boolean).join(" · "),
