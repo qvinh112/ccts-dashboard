@@ -90,14 +90,37 @@ const LS_EXPLAIN = "ccts_dash_explain_v1";
 let syncUser = "";
 try { syncUser = (JSON.parse(localStorage.getItem("ccts_dash_sync_v1") || "{}").user) || ""; } catch (e) {}
 // phân loại nguyên nhân khách quan (theo các nhóm miễn trừ đã dùng trong báo cáo SLA3h + disclaim của CCVN)
-const EXPLAIN_CATS = ["Trạm đêm đóng cửa (22h–6h)", "Thời tiết / thiên tai", "Hạ tầng điện / mạng", "Không tiếp cận được trạm", "Chờ vật tư", "Lỗi hệ thống VOMS", "Lỗi hệ thống CCTS", "Khách quan khác"];
+// Taxonomy giải trình overdue — bộ 2 TẦNG (chốt 17/07/2026), bám bộ Kịch bản AI QC 1–11:
+//  · TẦNG A = lỗi chủ quan KTV (không có yếu tố khách quan). Vẫn được miễn trừ (user chốt để đỡ sót
+//    case KB chưa phủ), nhưng phân loại RIÊNG để soi được "overdue thật do KTV".
+//  · TẦNG B = khách quan → miễn trừ, đúng các yếu tố user liệt kê.
+const EXPLAIN_CATS = [
+  "① Xử lý muộn (lỗi KTV)",                       // A
+  "② KTV đến, trụ bình thường / không tồn lỗi",   // B — KB3/4/5/9
+  "③ Chờ vật tư / thiếu linh kiện",               // B — KB8, Pending for spare parts
+  "④ Thời tiết / thiên tai",                       // B
+  "⑤ Không tiếp cận / không có quyền vào trạm",    // B — trạm đóng cửa, khóa, không được vào
+  "⑥ Yêu cầu / lỗi từ khách hàng",                 // B — KB1/2, sai thông tin điều phối, KH báo bình thường
+  "⑦ Hạ tầng điện / mạng của khách",               // B — KB7 điện/mạng
+  "⑧ VOMS reject dù xử lý đạt",                    // B — xử lý ontime nhưng VOMS trả về Open
+  "⑨ Lỗi hệ thống VOMS / CCTS treo",               // B — Pending for others/closure, hệ thống giữ
+  "⑩ Trùng ticket / tạo lô theo phase",            // B — KB11, Template Import
+  "⑪ Khách quan khác",                             // B
+];
+// truy cập nhãn theo vai trò (dùng cho autoCategory) — tránh gõ tay chuỗi có số vòng tròn
+const CAT = { lateKTV: EXPLAIN_CATS[0], nff: EXPLAIN_CATS[1], parts: EXPLAIN_CATS[2], weather: EXPLAIN_CATS[3], access: EXPLAIN_CATS[4], customer: EXPLAIN_CATS[5], grid: EXPLAIN_CATS[6], vomsReject: EXPLAIN_CATS[7], sysHold: EXPLAIN_CATS[8], dup: EXPLAIN_CATS[9], other: EXPLAIN_CATS[10] };
+const EXP_TIER_A = new Set([CAT.lateKTV]); // để tách optgroup + tô màu; còn lại là tầng B khách quan
+// nhãn 8 loại CŨ (trước 17/07) → nhãn mới, CHỈ để hiển thị/đếm cho đúng, KHÔNG ghi đè dữ liệu đã lưu
+// (dữ liệu chỉ đổi sang nhãn mới khi CSE sửa & lưu lại ticket đó)
+const CAT_MIGRATE = { "Trạm đêm đóng cửa (22h–6h)": CAT.access, "Thời tiết / thiên tai": CAT.weather, "Hạ tầng điện / mạng": CAT.grid, "Không tiếp cận được trạm": CAT.access, "Chờ vật tư": CAT.parts, "Lỗi hệ thống VOMS": CAT.vomsReject, "Lỗi hệ thống CCTS": CAT.sysHold, "Khách quan khác": CAT.other };
 let explainMap = {};
 try { explainMap = JSON.parse(localStorage.getItem(LS_EXPLAIN) || "{}"); } catch (e) { explainMap = {}; }
 // bản cũ lưu string (chỉ có text) → đọc kiểu nào cũng ra {c: phân loại, t: chi tiết}
 function expOf(tid) {
   const v = explainMap[tid];
   if (!v) return { c: "", t: "" };
-  return typeof v === "string" ? { c: "", t: v } : { c: v.c || "", t: v.t || "" };
+  const raw = typeof v === "string" ? { c: "", t: v } : { c: v.c || "", t: v.t || "" };
+  return { c: CAT_MIGRATE[raw.c] || raw.c, t: raw.t }; // nhãn cũ hiển thị sang nhãn mới
 }
 function expText(tid) { const e = expOf(tid); return [e.c, e.t].filter((s) => s && s.trim()).join(" — "); }
 function hasExp(tid) { const e = expOf(tid); return !!(e.c || e.t.trim()); }
@@ -823,6 +846,47 @@ const needExplain = (t) => t.zone === "overdue" || t.rejected || isOverVoms(t);
 const EXP_SCN = { "Xử lý muộn": COL.red, "Resolve muộn": COL.amber, "Lỗi hệ thống": "#8e44ad", "VOMS reject": "#16a085" };
 // giờ xử lý (create → solution đầu), null nếu chưa có solution
 const procHours = (t) => t.refSol ? (t.refSol.t - t.createT) / 3600000 : null;
+
+// --- TỰ PHÂN LOẠI nguyên nhân overdue (gợi ý category, không tự lưu) ---
+// map Ticket ID export -> dòng AI QC (để đọc Kịch bản đã chọn); memo theo qcRows.size
+let _qcByTid = null, _qcByTidN = -1;
+function qcByTicket() {
+  if (_qcByTid && _qcByTidN === qcRows.size) return _qcByTid;
+  const m = new Map();
+  for (const q of qcRows.values()) { const tid = qcTicketId(q); if (tid && !m.has(tid)) m.set(tid, q); }
+  _qcByTid = m; _qcByTidN = qcRows.size; return m;
+}
+// suy category từ chuỗi "Kịch bản N: … - Lý do: …" của AI QC
+function catFromScenario(txt) {
+  const s = (txt || "").toLowerCase();
+  const m = s.match(/kịch bản\s*(\d+)/);
+  if (!m) return "";
+  const n = +m[1];
+  const kwWeather = /mưa|bão|ngập|thời tiết|thiên tai|sét/.test(s);
+  const kwAccess = /không.*(vào|tiếp cận|quyền)|khóa cửa|bảo vệ|đóng cửa|không mở/.test(s);
+  const kwGrid = /điện|mạng|nguồn|internet|mất điện|hạ tầng/.test(s);
+  const kwCust = /khách hàng|yêu cầu|hẹn|từ chối|không đồng ý|sai thông tin/.test(s);
+  if (n === 1 || n === 2) return CAT.customer;      // không đến site: KH báo bình thường / không đồng ý / sai thông tin
+  if (n === 3 || n === 4 || n === 5 || n === 9) return CAT.nff; // trụ bình thường / reset / firmware → không tồn lỗi phần cứng
+  if (n === 7) return kwCust ? CAT.customer : CAT.grid;         // lỗi khách quan điện/mạng/khách
+  if (n === 8) return CAT.parts;                    // đến site thay vật tư
+  if (n === 10) { if (kwWeather) return CAT.weather; if (kwAccess) return CAT.access; if (kwGrid) return CAT.grid; if (kwCust) return CAT.customer; return CAT.other; }
+  if (n === 11) return CAT.dup;                     // trùng ticket
+  return "";
+}
+// gợi ý 1 nhãn category cho ticket cần giải trình. Ưu tiên tín hiệu tin cậy → yếu dần.
+// "" = chưa suy được, để CSE tự chọn.
+function autoCategory(t) {
+  if (t.status === "Pending for spare parts") return CAT.parts;   // trạng thái rất tin cậy
+  const q = qcByTicket().get(t.id);                                // Kịch bản AI QC (nếu ticket đã QC)
+  if (q) { const c = catFromScenario(q.checklist); if (c) return c; }
+  if (t.rejected) { const dh = procHours(t); return (dh != null && dh > t.limitH) ? CAT.lateKTV : CAT.vomsReject; }
+  if (t.status === "Pending for others" || t.status === "Pending for closure") return CAT.sysHold;
+  if (/template import/i.test(t.source || "")) return CAT.dup;
+  const dh = procHours(t);
+  if (dh != null && dh > t.limitH) return CAT.lateKTV;             // giờ xử lý vượt hạn, không tín hiệu khách quan
+  return "";
+}
 function explainScenario(t) {
   const dh = procHours(t);
   if (dh != null && dh > t.limitH) return "Xử lý muộn";                 // giờ xử lý vượt hạn → xử lý muộn (KHÔNG phải resolve muộn)
@@ -898,9 +962,12 @@ function renderDaily(f) {
         `<td>${t.proc || "—"}</td><td>${t.proc ? grpOf(t.proc) : ""}</td><td>${t.status}</td>` + scnCell +
         `<td style="text-align:left;font-size:12px;color:var(--red)">${why}${t.repeat30 ? ' · <b>TP' + (t.repeat7 ? "≤7ng" : "≤30ng") + "</b>" : ""}</td>` +
         `<td style="text-align:left"><div style="display:flex;flex-direction:column;gap:3px;min-width:210px">` +
-        `<select class="exp-cat" data-tid="${t.id}" style="padding:3px 4px;border:1px solid var(--border);border-radius:5px;font-size:12px;color:${expOf(t.id).c ? "var(--text)" : "var(--muted)"}"><option value="">— phân loại khách quan —</option>` +
-        EXPLAIN_CATS.map((c) => `<option ${expOf(t.id).c === c ? "selected" : ""}>${c}</option>`).join("") + `</select>` +
-        `<input class="exp-input" data-tid="${t.id}" value="${expOf(t.id).t.replace(/"/g, "&quot;")}" placeholder="chi tiết (vd: mưa bão, VOMS bắt lỗi ảnh…)" style="width:100%;padding:3px 6px;border:1px solid var(--border);border-radius:5px;font-size:12px"></div></td></tr>`;
+        `<select class="exp-cat" data-tid="${t.id}" style="padding:3px 4px;border:1px solid var(--border);border-radius:5px;font-size:12px;color:${expOf(t.id).c ? "var(--text)" : "var(--muted)"}"><option value="">— chọn phân loại —</option>` +
+        `<optgroup label="⚠ Lỗi chủ quan KTV"><option ${expOf(t.id).c === CAT.lateKTV ? "selected" : ""}>${CAT.lateKTV}</option></optgroup>` +
+        `<optgroup label="✅ Khách quan (miễn trừ)">` + EXPLAIN_CATS.slice(1).map((c) => `<option ${expOf(t.id).c === c ? "selected" : ""}>${c}</option>`).join("") + `</optgroup></select>` +
+        `<input class="exp-input" data-tid="${t.id}" value="${expOf(t.id).t.replace(/"/g, "&quot;")}" placeholder="chi tiết (vd: mưa bão, VOMS bắt lỗi ảnh…)" style="width:100%;padding:3px 6px;border:1px solid var(--border);border-radius:5px;font-size:12px">` +
+        ((sug) => sug && !expOf(t.id).c ? `<button class="exp-sug" data-tid="${t.id}" data-cat="${sug.replace(/"/g, "&quot;")}" title="Bấm để áp dụng gợi ý tự động (suy từ Kịch bản AI QC / trạng thái / timing)" style="align-self:flex-start;padding:2px 7px;font-size:11px;border:1px dashed var(--blue);border-radius:6px;background:transparent;color:var(--blue);cursor:pointer">💡 gợi ý: ${sug} — áp dụng</button>` : "")(autoCategory(t)) +
+        `</div></td></tr>`;
     }).join("") + "</tbody>";
   // chọn/gõ xong thì tự lưu (đọc cả cặp select+input cùng ticket) + cập nhật dòng tổng, không vẽ lại bảng để không mất focus
   const saveRow = (tid) => {
@@ -916,6 +983,14 @@ function renderDaily(f) {
   };
   $("daily").querySelectorAll(".exp-input, .exp-cat").forEach((el) =>
     el.addEventListener("change", () => saveRow(el.dataset.tid))
+  );
+  // nút 💡 gợi ý: nạp nhãn tự động vào select rồi lưu như CSE tự chọn
+  $("daily").querySelectorAll(".exp-sug").forEach((b) =>
+    b.addEventListener("click", () => {
+      const sel = $("daily").querySelector(`.exp-cat[data-tid="${b.dataset.tid}"]`);
+      if (sel) sel.value = b.dataset.cat;
+      saveRow(b.dataset.tid);
+    })
   );
   renderExplainDash(rows, all);
 }
@@ -1095,6 +1170,7 @@ function export3h(f) {
       "Trạng thái": t.status, "Kết quả": outcome(t),
       "FTF": t.ftf ? "x" : "", "Bị VOMS reject": t.rejected ? "x" : "",
       "Giải trình dữ liệu (tự động)": needExp ? autoExplain(t) : "",
+      "Gợi ý phân loại (tự động)": needExp ? autoCategory(t) : "",
       "Phân loại khách quan": needExp ? expOf(t.id).c : "",
       "Giải trình chi tiết (CSE)": needExp ? expOf(t.id).t : "",
     };
@@ -1164,7 +1240,7 @@ function exportQC04(f) {
       "Người": t.proc || "", "Khu": t.proc ? grpOf(t.proc) : "", "Trạng thái": t.status,
       "Cần giải trình vì": [t.zone === "overdue" ? "Quá hạn" : "", t.rejected ? "VOMS reject" : "", isOverVoms(t) ? "Open→VOMS>" + t.limitH + "h" : ""].filter(Boolean).join(" · "),
       "Kết quả": isExempt(t) ? "Miễn trừ" : t.zone === "overdue" ? "Quá hạn" : t.zone === "pending" ? "Chưa có sol" : "Đạt",
-      "Phân loại": expOf(t.id).c, "Giải trình": expOf(t.id).t,
+      "Gợi ý phân loại (tự động)": autoCategory(t), "Phân loại": expOf(t.id).c, "Giải trình": expOf(t.id).t,
     }))), "Overdue_GiaiTrinh");
   }
   // 4) Vật tư không khớp
@@ -1990,6 +2066,17 @@ $("btn_explain_save").addEventListener("click", () => {
   dailySummary(d.rows, d.created, d.byDay, d.day2 && d.day2 !== d.day);
   renderStats();
   flashSaved(n);
+});
+// tự phân loại hàng loạt: điền gợi ý autoCategory cho MỌI ca cần giải trình CHƯA có phân loại
+$("btn_sug_all").addEventListener("click", () => {
+  const { rows } = dailyRows(currentFilter());
+  const todo = rows.filter((t) => !expOf(t.id).c && autoCategory(t)); // chỉ ca chưa phân loại mà suy được
+  if (!todo.length) { alert("Không có ca nào để gợi ý (mọi ca hoặc đã phân loại, hoặc chưa suy được — cần chọn tay)."); return; }
+  if (!confirm(`Tự phân loại ${todo.length} ca theo gợi ý (Kịch bản AI QC / trạng thái)?\nCác ca đã phân loại thủ công KHÔNG bị đụng. Bạn vẫn sửa lại từng ca được.`)) return;
+  todo.forEach((t) => saveExplain(t.id, autoCategory(t), expOf(t.id).t));
+  renderDaily(currentFilter()); // vẽ lại để select hiện nhãn mới + bỏ nút gợi ý
+  renderStats();
+  flashSaved(todo.length);
 });
 $("btn_copy_report").addEventListener("click", () => {
   const { day, day2, rows, created, byDay } = dailyRows(currentFilter());
