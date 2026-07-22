@@ -12,14 +12,18 @@
 <script src="libs/station_map.js?v=20260716b"></script>
 <style>
 :root{
-  --navy:#1a3a5c; --blue:#2e6da4; --green:#2e8b57; --red:#c0392b; --amber:#e67e22;
-  --bg:#f4f6fa; --card:#ffffff; --border:#dde3ec; --text:#1f2d3d; --muted:#7a8699;
+  /* Bảng màu giấy đồng bộ với ccts-report: nền ấm, chữ gần đen, 1 màu nhấn xanh, viền mảnh */
+  --navy:#141310;   /* "ink" đậm — dùng cho tiêu đề & số liệu (không còn navy xanh) */
+  --blue:#2a78d6;   /* màu nhấn DUY NHẤT */
+  --green:#0ca30c; --red:#d03b3b; --amber:#e0930a;
+  --bg:#f9f9f7; --card:#fcfcfb; --border:#e1e0d9; --text:#0b0b0b; --muted:#898781;
+  --ink2:#52514e; --axis:#c3c2b7; --ring:rgba(11,11,11,.10);
 }
 *{box-sizing:border-box; margin:0; padding:0;}
-body{font-family:"Segoe UI",Arial,sans-serif; background:var(--bg); color:var(--text); font-size:13px;}
-header{background:var(--navy); color:#fff; padding:10px 18px; display:flex; align-items:center; gap:14px; flex-wrap:wrap;}
-header h1{font-size:17px; font-weight:600;}
-header .sub{font-size:12px; opacity:.75;}
+body{font-family:system-ui,-apple-system,"Segoe UI",Arial,sans-serif; background:var(--bg); color:var(--text); font-size:13px;}
+header{background:var(--card); color:var(--text); padding:10px 18px; display:flex; align-items:center; gap:14px; flex-wrap:wrap; border-bottom:1px solid var(--border); position:sticky; top:0; z-index:50;}
+header h1{font-size:17px; font-weight:600; color:var(--text);}
+header .sub{font-size:12px; color:var(--muted);}
 #dropzone{border:2px dashed #9fb3c8; border-radius:10px; margin:16px; padding:36px; text-align:center; color:var(--muted); background:#fff; cursor:pointer; transition:.15s;}
 #dropzone.drag{border-color:var(--blue); background:#eef5fc; color:var(--blue);}
 #dropzone b{color:var(--navy); font-size:15px;}
@@ -37,9 +41,9 @@ header .sub{font-size:12px; opacity:.75;}
 .kpi .t{font-size:11px; color:var(--muted); font-weight:600; text-transform:uppercase;}
 .kpi .v{font-size:22px; font-weight:700; color:var(--navy); margin-top:2px;}
 .kpi .d{font-size:11px; margin-top:2px;}
-.kpi.k-good{border-left:4px solid var(--green); background:#f2faf5;}
-.kpi.k-warn{border-left:4px solid var(--amber); background:#fdf8ee;}
-.kpi.k-bad{border-left:4px solid var(--red); background:#fdf1ef;}
+.kpi.k-good{border-left:4px solid var(--green); background:#f4f7f2;}
+.kpi.k-warn{border-left:4px solid var(--amber); background:#f8f4ea;}
+.kpi.k-bad{border-left:4px solid var(--red); background:#f8f0ee;}
 .up{color:var(--green);} .down{color:var(--red);} .flat{color:var(--muted);}
 .grid2{display:grid; grid-template-columns:1fr 1fr; gap:12px;}
 @media(max-width:1000px){.grid2{grid-template-columns:1fr;}}
@@ -55,14 +59,14 @@ header .sub{font-size:12px; opacity:.75;}
 .chartbox{position:relative; height:280px;}
 table{width:100%; border-collapse:collapse; font-size:12.5px;}
 th,td{padding:5px 7px; border-bottom:1px solid var(--border); text-align:right; white-space:nowrap;}
-th{background:#eef2f8; color:var(--navy); cursor:pointer; user-select:none; position:sticky; top:0;}
+th{background:#f3f2ec; color:var(--muted); font-weight:600; text-transform:uppercase; letter-spacing:.03em; cursor:pointer; user-select:none; position:sticky; top:0;}
 th:first-child,td:first-child{text-align:left;}
 th:nth-child(2),td:nth-child(2){text-align:left;}
-tr:hover td{background:#f4f8fd;}
-tr.rollup td{background:#e9eff7; font-weight:700;}
-tr.total td{background:var(--navy); color:#fff; font-weight:700;}
-td.bad{background:#fdecea; color:var(--red); font-weight:700;}
-td.warn{background:#fdf3e3; color:var(--amber); font-weight:700;}
+tr:hover td{background:#f3f2ec;}
+tr.rollup td{background:#efeee9; font-weight:700;}
+tr.total td{background:#eeede7; color:var(--text); font-weight:700; border-top:2px solid var(--axis);}
+td.bad{background:#fbeceb; color:var(--red); font-weight:700;}
+td.warn{background:#fbf3e2; color:var(--amber); font-weight:700;}
 .tablewrap{max-height:520px; overflow:auto;}
 .heat{font-size:12px;}
 .heat td{text-align:center;}
@@ -241,12 +245,23 @@ footer{padding:8px 16px 20px; color:var(--muted); font-size:11px;}
         <button class="btn-gray" id="btn_copy_report" style="padding:4px 10px;font-size:12px">📋 Copy báo cáo gửi quản lý</button>
         <button class="btn-green" id="btn_daily" style="padding:4px 10px;font-size:12px">⬇ Xuất Excel (theo lựa chọn)</button>
         <button class="btn-green" id="btn_3h_report" style="padding:4px 10px;font-size:12px" title="Xuất toàn bộ ticket mọi nhóm SLA (3h/4h/7h/12h/48h) trong kỳ lọc, kèm giải trình">⬇ Xuất toàn bộ ticket</button>
+        <button class="btn-gray" id="btn_exp_backup" style="padding:4px 10px;font-size:12px" title="Tải file .json chứa TOÀN BỘ giải trình đang có — sao lưu phòng khi mất">💾 Backup giải trình (.json)</button>
+        <button class="btn-gray" id="btn_exp_restore" style="padding:4px 10px;font-size:12px" title="Nạp lại giải trình từ file .json đã backup — chỉ bổ sung, không xóa cái đang có">↩ Khôi phục từ .json</button>
+        <input type="file" id="exp_restore_file" accept=".json,application/json" style="display:none">
       </span>
     </h2>
     <div id="exp_chips" class="chips">
       <button data-k="" class="active">Tất cả nhóm</button>
       <button data-k="fast">Nhanh 3h · 4h/7h</button>
       <button data-k="48">Chỉ 48h</button>
+    </div>
+    <div id="exp_filter" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:2px 0 8px">
+      <input type="search" id="ef_q" placeholder="🔎 Tìm mã ticket / tên / trạm / người xử lý…" style="flex:1;min-width:220px;padding:5px 9px;border:1px solid var(--border);border-radius:6px;font-size:12.5px">
+      <select id="ef_cat" style="padding:5px 7px;border:1px solid var(--border);border-radius:6px;font-size:12.5px" title="Lọc theo phân loại giải trình"><option value="">Mọi phân loại</option></select>
+      <select id="ef_scn" style="padding:5px 7px;border:1px solid var(--border);border-radius:6px;font-size:12.5px" title="Lọc theo tình huống"><option value="">Mọi tình huống</option></select>
+      <select id="ef_exp" style="padding:5px 7px;border:1px solid var(--border);border-radius:6px;font-size:12.5px" title="Lọc theo trạng thái giải trình"><option value="">Đã/chưa giải trình</option><option value="done">✓ Đã giải trình</option><option value="todo">✗ Chưa giải trình</option></select>
+      <select id="ef_kv" style="padding:5px 7px;border:1px solid var(--border);border-radius:6px;font-size:12.5px" title="Lọc theo khu vực"><option value="">Mọi khu vực</option></select>
+      <button class="btn-gray" id="ef_clear" style="padding:5px 10px;font-size:12px">Xóa lọc</button>
     </div>
     <div id="d_sum" style="font-size:13px;margin-bottom:8px"></div>
     <div class="grid3" style="margin-bottom:10px">
@@ -274,7 +289,16 @@ footer{padding:8px 16px 20px; color:var(--muted); font-size:11px;}
         <button class="btn-gray" id="btn_perf_toggle" style="padding:4px 10px;font-size:12px">Xem bảng ▾</button>
       </span>
     </h2>
-    <div id="perf_wrap" style="display:none"><div class="tablewrap"><table id="perf"></table></div></div>
+    <div id="perf_wrap" style="display:none">
+      <div id="perf_filter" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:2px 0 8px">
+        <input type="search" id="pf_q" placeholder="🔎 Tìm tên người xử lý…" style="flex:1;min-width:180px;padding:5px 9px;border:1px solid var(--border);border-radius:6px;font-size:12.5px">
+        <select id="pf_kv" style="padding:5px 7px;border:1px solid var(--border);border-radius:6px;font-size:12.5px" title="Lọc theo khu vực"><option value="">Mọi khu vực</option></select>
+        <select id="pf_od" style="padding:5px 7px;border:1px solid var(--border);border-radius:6px;font-size:12.5px" title="Lọc theo tỉ lệ quá hạn"><option value="">Mọi mức %QH</option><option value="0">Không quá hạn (0%)</option><option value="5">%QH ≥ 5%</option><option value="10">%QH ≥ 10%</option><option value="20">%QH ≥ 20%</option></select>
+        <select id="pf_tp" style="padding:5px 7px;border:1px solid var(--border);border-radius:6px;font-size:12.5px" title="Lọc theo tái phát"><option value="">Có/không tái phát</option><option value="tp">Có tái phát</option><option value="notp">Không tái phát</option></select>
+        <button class="btn-gray" id="pf_clear" style="padding:5px 10px;font-size:12px">Xóa lọc</button>
+      </div>
+      <div class="tablewrap"><table id="perf"></table></div>
+    </div>
   </div>
 
   <div class="card">
@@ -376,6 +400,6 @@ footer{padding:8px 16px 20px; color:var(--muted); font-size:11px;}
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-database-compat.js"></script>
 <script src="config.js?v=20260716c"></script>
-<script src="app.js?v=20260717a"></script>
+<script src="app.js?v=20260722a"></script>
 </body>
 </html>

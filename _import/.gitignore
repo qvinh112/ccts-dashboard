@@ -1,0 +1,4 @@
+# Không commit file export nặng lên repo dashboard (chỉ là dữ liệu import cục bộ)
+*.xlsx
+archive/
+_last_push.json

@@ -15,7 +15,8 @@ const LS_KEY = "ccts_dash_groups_v1";
 const OD_TARGET = 3;
 const OD_RED = 5, OD_WARN = 3; // ngưỡng %quá hạn tô màu bảng nhân sự
 
-const COL = { navy:"#1a3a5c", blue:"#2e6da4", green:"#2e8b57", red:"#c0392b", amber:"#e67e22", gray:"#94a3b8" };
+// đồng bộ với bảng màu giấy của ccts-report (s1 xanh nhấn, semantic good/warn/crit)
+const COL = { navy:"#141310", blue:"#2a78d6", green:"#0ca30c", red:"#d03b3b", amber:"#e0930a", gray:"#a8a69b" };
 
 // ---------- state ----------
 let tickets = new Map();      // id -> ticket object
@@ -125,8 +126,8 @@ function expOf(tid) {
 function expText(tid) { const e = expOf(tid); return [e.c, e.t].filter((s) => s && s.trim()).join(" — "); }
 function hasExp(tid) { const e = expOf(tid); return !!(e.c || e.t.trim()); }
 function saveExplain(tid, cat, text) {
-  if ((cat || "").trim() || (text || "").trim()) explainMap[tid] = { c: (cat || "").trim(), t: (text || "").trim() };
-  else delete explainMap[tid];
+  if ((cat || "").trim() || (text || "").trim()) explainMap[tid] = { c: (cat || "").trim(), t: (text || "").trim(), up: Date.now() };
+  else if (explainMap[tid]) explainMap[tid] = { c: "", t: "", up: Date.now(), del: 1 }; // tombstone: đánh dấu ĐÃ XÓA (kèm mốc thời gian) thay vì bỏ khỏi map — để lệnh xóa lan qua Firebase mà không bị merge dựng lại
   localStorage.setItem(LS_EXPLAIN, JSON.stringify(explainMap));
   fbPushExplain(tid); // đẩy lên Firebase (bản offline FIREBASE_CONFIG=null thì chỉ lưu máy)
 }
@@ -141,20 +142,41 @@ function expKey(tid) { return String(tid).replace(/[.#$/\[\]]/g, (c) => "%" + c.
 // đẩy 1 giải trình lên Firebase (upsert theo ticket; xóa node khi giải trình bị xóa trống)
 function fbPushExplain(tid) {
   if (!fbExpRef) return;
-  const e = expOf(tid);
-  if (e.c || e.t) fbExpRef.child(expKey(tid)).set({ id: tid, c: e.c, t: e.t, user: syncUser || "", up: Date.now() }).catch(() => {});
-  else fbExpRef.child(expKey(tid)).remove().catch(() => {});
+  let v = explainMap[tid];
+  if (v == null) { fbExpRef.child(expKey(tid)).remove().catch(() => {}); return; }
+  if (typeof v === "string") v = { c: "", t: v, up: 0 }; // bản cũ lưu chuỗi
+  const rec = { id: tid, c: v.c || "", t: v.t || "", user: syncUser || "", up: v.up || Date.now() };
+  if (v.del) rec.del = 1; // đẩy cả tombstone để lệnh xóa lan sang máy khác
+  fbExpRef.child(expKey(tid)).set(rec).catch(() => {});
 }
-// áp snapshot server vào explainMap (server là nguồn chuẩn). Đang gõ dở ô giải trình thì
-// hoãn lại, áp khi rời ô — không mất chữ/focus (bảng ngày vốn không vẽ lại trong renderStats).
+// HỢP NHẤT (merge) snapshot server vào explainMap — KHÔNG thay thế toàn bộ như trước.
+// Sửa lỗi mất giải trình: bản cũ làm explainMap={} rồi dựng lại, nên mỗi lần server trả rỗng
+// (mất mạng chớp nhoáng / node tạm trống) là xóa sạch cả bản lưu trên máy. Nay:
+//  · snapshot RỖNG → bỏ qua, không đụng dữ liệu local;
+//  · mỗi ticket lấy bản có 'up' (mốc thời gian) MỚI hơn; giữ cả tombstone (del) để lệnh xóa lan đúng;
+//  · entry chỉ có ở local (chưa lên server) được GIỮ, không bị xóa.
+// Đang gõ dở ô giải trình thì hoãn, áp khi rời ô (focusout) — không mất chữ/focus.
 function applyExplainRemote(all) {
   const ae = document.activeElement;
   if (ae && ae.classList && (ae.classList.contains("exp-input") || ae.classList.contains("exp-cat"))) { _expPending = all; return; }
   _expPending = null;
-  explainMap = {};
-  for (const k in all) { const v = all[k] || {}; const id = v.id || k; if (v.c || v.t) explainMap[id] = { c: v.c || "", t: v.t || "" }; }
+  if (!all || typeof all !== "object" || !Object.keys(all).length) return; // server tạm rỗng → không xóa gì
+  let changed = false;
+  for (const k in all) {
+    const v = all[k] || {};
+    const id = v.id || k;
+    const cur = explainMap[id];
+    const curUp = (cur && typeof cur === "object" && cur.up) || 0;
+    const srvUp = v.up || 0;
+    if (cur && srvUp < curUp) continue; // local mới hơn → giữ local
+    const rec = { c: v.c || "", t: v.t || "", up: srvUp };
+    if (v.del) rec.del = 1;
+    const curC = cur ? (typeof cur === "string" ? cur : cur.t) : "", curCat = cur && typeof cur === "object" ? cur.c : "";
+    if (!cur || curCat !== rec.c || curC !== rec.t || !!(cur && cur.del) !== !!rec.del) changed = true;
+    explainMap[id] = rec;
+  }
   localStorage.setItem(LS_EXPLAIN, JSON.stringify(explainMap));
-  if (tickets.size) renderStats();
+  if (changed && tickets.size) renderStats();
 }
 document.addEventListener("focusout", () => { if (_expPending) setTimeout(() => { if (_expPending) applyExplainRemote(_expPending); }, 150); });
 // ticket quá hạn HOẶC bị VOMS reject, nếu có giải trình khách quan → miễn trừ: SLA tính là ontime ở KPI/%QH toàn dashboard
@@ -909,6 +931,30 @@ function cycTip(t) {
   if (t.vomsTotalH != null) lines.push(`Tổng: ${r1(t.vomsTotalH)}h / ${t.limitH}h`);
   return ` title="${lines.join("\n").replace(/"/g, "'")}"`;
 }
+// ---- bộ lọc client-side cho bảng giải trình tích hợp (search + phân loại + tình huống + đã/chưa GT + khu) ----
+const expFilt = { q: "", cat: "", scn: "", exp: "", kv: "" };
+function applyExpFilter(rows) {
+  const q = expFilt.q.trim().toLowerCase();
+  return rows.filter((t) => {
+    if (q && !((t.id + " " + (t.name || "") + " " + (t.station || "") + " " + (t.proc || "") + " " + (t.extId || "") + " " + (t.err || "")).toLowerCase().includes(q))) return false;
+    if (expFilt.cat && expOf(t.id).c !== expFilt.cat) return false;
+    if (expFilt.scn && explainScenario(t) !== expFilt.scn) return false;
+    if (expFilt.exp === "done" && !hasExp(t.id)) return false;
+    if (expFilt.exp === "todo" && hasExp(t.id)) return false;
+    if (expFilt.kv && (t.proc ? grpOf(t.proc) : "Chưa phân khu") !== expFilt.kv) return false;
+    return true;
+  });
+}
+// đổ option cho các ô lọc (phân loại/tình huống tĩnh; khu vực suy từ groupMap) — gọi mỗi lần render, idempotent
+function fillFilterOpts() {
+  const cat = $("ef_cat"); if (cat && cat.options.length <= 1) EXPLAIN_CATS.forEach((c) => cat.add(new Option(c, c)));
+  const scn = $("ef_scn"); if (scn && scn.options.length <= 1) Object.keys(EXP_SCN).forEach((s) => scn.add(new Option(s, s)));
+  const kvs = [...new Set([...Object.values(groupMap), "Chưa phân khu"])].sort();
+  for (const id of ["ef_kv", "pf_kv"]) {
+    const sel = $(id); if (!sel) continue;
+    const cur = sel.value; sel.length = 1; kvs.forEach((g) => sel.add(new Option(g, g))); sel.value = cur;
+  }
+}
 function dailyRows(f) {
   const day = $("d_day").value;
   if (!day) return { day: "", day2: "", rows: [], created: 0, byDay: {} };
@@ -928,7 +974,9 @@ function renderDaily(f) {
   if (!$("d_day").value && tickets.size) { // mặc định = ngày có ticket mới nhất (không lấy ngày solution)
     $("d_day").value = dayKey(new Date(Math.max(...[...tickets.values()].map((t) => +t.createT))));
   }
-  const { day, day2, rows, created, byDay, all } = dailyRows(f);
+  const { day, day2, rows: rawRows, created, byDay, all } = dailyRows(f);
+  fillFilterOpts();
+  const rows = applyExpFilter(rawRows); // áp bộ lọc client-side; số liệu tóm tắt/biểu đồ phản ánh đúng cái đang hiện
   const multi = day2 && day2 !== day; // xem khoảng nhiều ngày: nhóm theo ngày trước, hiện thêm ngày ở cột Tạo lúc
   dailySummary(rows, created, byDay, multi);
   const order = { "3h": 0, "4h": 1, "7h": 2, "12h": 3, "48h": 4 };
@@ -976,8 +1024,9 @@ function renderDaily(f) {
     saveExplain(tid, cat ? cat.value : "", inp ? inp.value : "");
     if (cat) cat.style.color = cat.value ? "var(--text)" : "var(--muted)";
     const d = dailyRows(currentFilter());
-    dailySummary(d.rows, d.created, d.byDay, d.day2 && d.day2 !== d.day);
-    renderExplainDash(d.rows, d.all);
+    const dr = applyExpFilter(d.rows);
+    dailySummary(dr, d.created, d.byDay, d.day2 && d.day2 !== d.day);
+    renderExplainDash(dr, d.all);
     renderStats();
     flashSaved(1);
   };
@@ -999,7 +1048,7 @@ function renderDaily(f) {
 // (1) tỉ lệ Quá hạn/Đạt/Chưa có KQ trên TOÀN BỘ ticket tạo trong kỳ
 // (2) theo TÌNH HUỐNG (Xử lý muộn / Resolve muộn / Lỗi hệ thống / VOMS reject) — đã/chưa giải trình để trong tooltip
 // (3) theo NGUYÊN NHÂN khách quan CSE đã phân loại (EXPLAIN_CATS)
-const PIE = ["#2e6da4", "#2e8b57", "#e67e22", "#c0392b", "#8e44ad", "#16a085", "#f39c12", "#2c3e50", "#d35400", "#27ae60"];
+const PIE = ["#2a78d6", "#1baf7a", "#eda100", "#008300", "#4a3aa7", "#e34948", "#e87ba4", "#eb6834", "#008300", "#0ca30c"];
 function renderExplainDash(rows, all) {
   if (!$("c_exp_scn") || !$("c_exp_cat")) return; // chưa có canvas (vd bản live) → bỏ qua
   const scns = ["Xử lý muộn", "Resolve muộn", "Lỗi hệ thống", "VOMS reject"];
@@ -1661,7 +1710,9 @@ function periodStats(rows, ref) {
   };
 }
 let perfSort = { col: "sAll", dir: -1 };
+const perfFilt = { q: "", kv: "", od: "", tp: "" };
 function renderPerf(f) {
+  fillFilterOpts();
   const level = $("f_level").value;
   const ref = $("f_to").value ? new Date($("f_to").value + "T23:59:59") : new Date();
   $("perf_note").textContent = "Sol = solution đã gửi · %QH = tỉ lệ quá hạn ticket người đó xử lý (đã trừ ticket có giải trình khách quan) · ngày tham chiếu " + fmtD(ref) + " · TP = bị tái phát (quy cho người xử lý trước) · người chưa phân khu ẨN khỏi bảng (phân khu ở nút ⚙, xem lại bằng lọc Khu = Chưa phân khu)";
@@ -1711,6 +1762,14 @@ function renderPerf(f) {
     }
     rows = Object.values(g).map((r) => ({ ...r, oD: r._odD[1] ? 100 * r._odD[0] / r._odD[1] : null, o7: r._od7[1] ? 100 * r._od7[0] / r._od7[1] : null, oM: r._odM[1] ? 100 * r._odM[0] / r._odM[1] : null }));
   }
+
+  // bộ lọc chi tiết của bảng (search tên / khu / ngưỡng %QH tháng / tái phát)
+  const pq = perfFilt.q.trim().toLowerCase();
+  if (pq) rows = rows.filter((r) => r.name.toLowerCase().includes(pq));
+  if (perfFilt.kv) rows = rows.filter((r) => r.grp === perfFilt.kv);
+  if (perfFilt.od) { const th = +perfFilt.od; rows = rows.filter((r) => th === 0 ? (r.oM || 0) === 0 : (r.oM || 0) >= th); }
+  if (perfFilt.tp === "tp") rows = rows.filter((r) => (r.r30 || 0) > 0);
+  else if (perfFilt.tp === "notp") rows = rows.filter((r) => (r.r30 || 0) === 0);
 
   rows.sort((a, b) => ((a[perfSort.col] ?? -1) - (b[perfSort.col] ?? -1)) * perfSort.dir || a.name.localeCompare(b.name));
 
@@ -2189,6 +2248,71 @@ document.querySelectorAll("#exp_chips button").forEach((b) => b.addEventListener
   document.querySelectorAll("#exp_chips button").forEach((x) => x.classList.toggle("active", x === b));
   renderDaily(currentFilter());
 }));
+
+// ---------- bộ lọc chi tiết bảng giải trình tích hợp ----------
+(() => {
+  const q = $("ef_q");
+  if (q) { let tmr; q.addEventListener("input", () => { clearTimeout(tmr); tmr = setTimeout(() => { expFilt.q = q.value; renderDaily(currentFilter()); }, 200); }); }
+  const bind = (id, key) => { const el = $(id); if (el) el.addEventListener("change", () => { expFilt[key] = el.value; renderDaily(currentFilter()); }); };
+  bind("ef_cat", "cat"); bind("ef_scn", "scn"); bind("ef_exp", "exp"); bind("ef_kv", "kv");
+  const clr = $("ef_clear");
+  if (clr) clr.addEventListener("click", () => {
+    Object.assign(expFilt, { q: "", cat: "", scn: "", exp: "", kv: "" });
+    ["ef_q", "ef_cat", "ef_scn", "ef_exp", "ef_kv"].forEach((id) => { if ($(id)) $(id).value = ""; });
+    renderDaily(currentFilter());
+  });
+})();
+
+// ---------- bộ lọc chi tiết bảng hiệu suất CSE ----------
+(() => {
+  const q = $("pf_q");
+  if (q) { let tmr; q.addEventListener("input", () => { clearTimeout(tmr); tmr = setTimeout(() => { perfFilt.q = q.value; renderPerf(currentFilter()); }, 200); }); }
+  const bind = (id, key) => { const el = $(id); if (el) el.addEventListener("change", () => { perfFilt[key] = el.value; renderPerf(currentFilter()); }); };
+  bind("pf_kv", "kv"); bind("pf_od", "od"); bind("pf_tp", "tp");
+  const clr = $("pf_clear");
+  if (clr) clr.addEventListener("click", () => {
+    Object.assign(perfFilt, { q: "", kv: "", od: "", tp: "" });
+    ["pf_q", "pf_kv", "pf_od", "pf_tp"].forEach((id) => { if ($(id)) $(id).value = ""; });
+    renderPerf(currentFilter());
+  });
+})();
+
+// ---------- backup / khôi phục giải trình (.json) — lưới an toàn thủ công phòng mất dữ liệu ----------
+(() => {
+  const bk = $("btn_exp_backup");
+  if (bk) bk.addEventListener("click", () => {
+    const blob = new Blob([JSON.stringify(explainMap, null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "backup_giaitrinh_" + dayKey(new Date()) + ".json";
+    a.click(); URL.revokeObjectURL(a.href);
+  });
+  const rs = $("btn_exp_restore"), fi = $("exp_restore_file");
+  if (rs && fi) {
+    rs.addEventListener("click", () => fi.click());
+    fi.addEventListener("change", () => {
+      const file = fi.files[0]; if (!file) return;
+      const rd = new FileReader();
+      rd.onload = () => {
+        let obj; try { obj = JSON.parse(rd.result); } catch (e) { alert("File .json không hợp lệ"); return; }
+        let add = 0;
+        for (const k in obj) {
+          const v = obj[k] || {};
+          const rec = typeof v === "string" ? { c: "", t: v, up: 0 } : { c: v.c || "", t: v.t || "", up: v.up || Date.now() };
+          if (v.del) rec.del = 1;
+          const cur = explainMap[k], curUp = (cur && typeof cur === "object" && cur.up) || 0;
+          if (!cur || (rec.up || 0) >= curUp) { explainMap[k] = rec; add++; fbPushExplain(k); } // chỉ bổ sung/cập nhật, không xóa cái đang có
+        }
+        localStorage.setItem(LS_EXPLAIN, JSON.stringify(explainMap));
+        if (tickets.size) renderStats();
+        if (typeof renderDaily === "function") renderDaily(currentFilter());
+        alert("Đã khôi phục " + add + " giải trình từ backup (chỉ bổ sung, không xóa).");
+        fi.value = "";
+      };
+      rd.readAsText(file);
+    });
+  }
+})();
 
 // ---------- thu gọn các bảng chi tiết (click mới hiện) ----------
 function toggleWrap(wrapId, btnId, showTxt, hideTxt) {
